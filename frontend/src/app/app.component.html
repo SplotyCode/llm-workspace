@@ -1,0 +1,114 @@
+<div class="page">
+  <header class="topbar">
+    <div>
+      <h1>LLM Router Chat</h1>
+    </div>
+    <button class="secondary" (click)="openSettings()">LLM Settings</button>
+  </header>
+
+  <section class="quick-select">
+    <div class="row-head">
+      <h2>Quick Selector</h2>
+      <span class="muted">{{ selectedTargetLabels.length }} selected</span>
+    </div>
+    <div class="chips">
+      <button
+        type="button"
+        class="chip"
+        *ngFor="let target of quickTargets"
+        [class.selected]="isTargetSelected(target.id)"
+        [class.openrouter]="target.provider === 'openrouter'"
+        [class.ollama]="target.provider === 'ollama'"
+        (click)="toggleTarget(target.id)"
+      >
+        <span class="provider-icon" [attr.aria-label]="target.provider">{{ providerIcon(target.provider) }}</span>
+        <span>{{ target.model }}</span>
+      </button>
+    </div>
+  </section>
+
+  <section class="chat-layout">
+    <section class="composer panel">
+      <textarea
+        [(ngModel)]="prompt"
+        rows="7"
+        placeholder="Ask your question. All selected LLMs will respond via one streaming request."
+      ></textarea>
+      <div class="actions">
+        <button class="primary" (click)="submit()" [disabled]="isStreaming">{{ isStreaming ? 'Streaming...' : 'Send' }}</button>
+        <button class="secondary" (click)="cancel()" [disabled]="!isStreaming">Stop</button>
+      </div>
+      <div class="active-llms" *ngIf="selectedTargetLabels.length">
+        <span *ngFor="let label of selectedTargetLabels">{{ label }}</span>
+      </div>
+      <p class="error" *ngIf="error">{{ error }}</p>
+    </section>
+
+    <section class="stream panel">
+      <div class="row-head">
+        <h2>Responses</h2>
+      </div>
+      <div class="results" *ngIf="responseCards.length; else noResponse">
+        <article class="result" *ngFor="let card of responseCards">
+          <div class="result-head">
+            <h3>{{ card.provider }} · {{ card.model }}</h3>
+            <span class="status" [class.streaming]="card.status === 'streaming'" [class.done]="card.status === 'done'" [class.error]="card.status === 'error'">
+              {{ card.status }}
+            </span>
+          </div>
+          <pre>{{ card.text || 'Waiting for first token...' }}</pre>
+          <p class="error" *ngIf="card.error">{{ card.error }}</p>
+        </article>
+      </div>
+      <ng-template #noResponse>
+        <p class="muted">No response yet.</p>
+      </ng-template>
+    </section>
+  </section>
+</div>
+
+<div class="modal-backdrop" *ngIf="showSettings" (click)="closeSettings()"></div>
+<section class="modal" *ngIf="showSettings" role="dialog" aria-modal="true">
+  <div class="row-head">
+    <h2>LLM Configuration</h2>
+    <button class="secondary" (click)="closeSettings()">Close</button>
+  </div>
+
+  <article class="config-block">
+    <h3>OpenRouter</h3>
+    <label>
+      API Key
+      <input type="password" [(ngModel)]="config.openrouter.apiKey" placeholder="sk-or-v1-..." />
+    </label>
+    <label>
+      Base URL
+      <input type="text" [(ngModel)]="config.openrouter.baseUrl" placeholder="https://openrouter.ai/api/v1" />
+    </label>
+    <label>
+      Models (comma-separated)
+      <input
+        type="text"
+        [ngModel]="modelsToInput(config.openrouter.models)"
+        (ngModelChange)="updateOpenRouterModels($event)"
+        placeholder="openai/gpt-4o-mini, anthropic/claude-3.5-sonnet"
+      />
+    </label>
+  </article>
+
+  <article class="config-block">
+    <h3>Ollama</h3>
+    <label>
+      Base URL
+      <input type="text" [(ngModel)]="config.ollama.baseUrl" placeholder="http://localhost:11434" />
+    </label>
+    <label>
+      Models (comma-separated)
+      <input
+        type="text"
+        [ngModel]="modelsToInput(config.ollama.models)"
+        (ngModelChange)="updateOllamaModels($event)"
+        placeholder="llama3.2:latest, qwen2.5"
+      />
+    </label>
+  </article>
+</section>
