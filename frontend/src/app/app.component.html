@@ -1,70 +1,109 @@
 <div class="page">
   <header class="topbar">
     <div>
-      <h1>LLM Router Chat</h1>
+      <h1>LLM Workspace</h1>
     </div>
     <button class="secondary" (click)="openSettings()">LLM Settings</button>
   </header>
 
-  <section class="quick-select">
-    <div class="row-head">
-      <h2>Quick Selector</h2>
-      <span class="muted">{{ selectedTargetLabels.length }} selected</span>
-    </div>
-    <div class="chips">
-      <button
-        type="button"
-        class="chip"
-        *ngFor="let target of quickTargets"
-        [class.selected]="isTargetSelected(target.id)"
-        [class.openrouter]="target.provider === 'openrouter'"
-        [class.ollama]="target.provider === 'ollama'"
-        (click)="toggleTarget(target.id)"
-      >
-        <span class="provider-icon" [attr.aria-label]="target.provider">{{ providerIcon(target.provider) }}</span>
-        <span>{{ target.model }}</span>
-      </button>
-    </div>
-  </section>
-
-  <section class="chat-layout">
-    <section class="composer panel">
-      <textarea
-        [(ngModel)]="prompt"
-        rows="7"
-        placeholder="Ask your question. All selected LLMs will respond via one streaming request."
-      ></textarea>
-      <div class="actions">
-        <button class="primary" (click)="submit()" [disabled]="isStreaming">{{ isStreaming ? 'Streaming...' : 'Send' }}</button>
-        <button class="secondary" (click)="cancel()" [disabled]="!isStreaming">Stop</button>
-      </div>
-      <div class="active-llms" *ngIf="selectedTargetLabels.length">
-        <span *ngFor="let label of selectedTargetLabels">{{ label }}</span>
-      </div>
-      <p class="error" *ngIf="error">{{ error }}</p>
-    </section>
-
-    <section class="stream panel">
-      <div class="row-head">
-        <h2>Responses</h2>
-      </div>
-      <div class="results" *ngIf="responseCards.length; else noResponse">
-        <article class="result" *ngFor="let card of responseCards">
-          <div class="result-head">
-            <h3>{{ card.provider }} · {{ card.model }}</h3>
-            <span class="status" [class.streaming]="card.status === 'streaming'" [class.done]="card.status === 'done'" [class.error]="card.status === 'error'">
-              {{ card.status }}
+  <main class="layout">
+    <aside class="sidebar panel">
+      <section>
+        <div class="row-head">
+          <h2>Folders</h2>
+        </div>
+        <div class="folder-create">
+          <input type="text" [(ngModel)]="newFolderName" placeholder="New folder name" />
+          <button class="secondary" (click)="createFolder()">Add</button>
+        </div>
+        <div class="folder-list">
+          <div
+            class="folder-item"
+            *ngFor="let folder of folders"
+            [class.active]="folder.id === selectedFolderId"
+            (click)="selectFolder(folder.id)"
+          >
+            <span>{{ folder.name }}</span>
+            <span class="folder-actions">
+              <span class="folder-temp" *ngIf="folder.temperature != null">T={{ folder.temperature }}</span>
+              <button type="button" class="folder-settings-btn" (click)="openFolderSettings(folder, $event)" aria-label="Folder settings">⚙</button>
             </span>
           </div>
-          <pre>{{ card.text || 'Waiting for first token...' }}</pre>
-          <p class="error" *ngIf="card.error">{{ card.error }}</p>
+        </div>
+      </section>
+
+      <section *ngIf="selectedFolderId">
+        <div class="row-head">
+          <h2>Chats</h2>
+          <button class="secondary" (click)="createChat()">New Chat</button>
+        </div>
+        <div class="chat-list">
+          <button
+            type="button"
+            class="chat-item"
+            *ngFor="let chat of chats"
+            [class.active]="chat.id === selectedChatId"
+            (click)="selectChat(chat.id)"
+          >
+            {{ chat.title }}
+          </button>
+        </div>
+      </section>
+    </aside>
+
+    <section class="main panel">
+      <section class="quick-select">
+        <div class="row-head">
+          <h2>Quick Selector</h2>
+          <span class="muted">{{ selectedTargets.size }} selected</span>
+        </div>
+        <div class="chips">
+          <button
+            type="button"
+            class="chip"
+            *ngFor="let target of quickTargets"
+            [class.selected]="isTargetSelected(target.id)"
+            [class.openrouter]="target.provider === 'openrouter'"
+            [class.ollama]="target.provider === 'ollama'"
+            (click)="toggleTarget(target.id)"
+          >
+            <span class="provider-icon" [attr.aria-label]="target.provider">{{ providerIcon(target.provider) }}</span>
+            <span>{{ target.model }}</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="history" *ngIf="selectedChat; else noChat">
+        <article class="msg" *ngFor="let msg of selectedChat.messages" [class.user]="msg.role === 'user'" [class.assistant]="msg.role === 'assistant'">
+          <div class="msg-meta">
+            <strong>{{ msg.role }}</strong>
+            <span *ngIf="msg.provider && msg.model">{{ msg.provider }} · {{ msg.model }}</span>
+            <span class="status" *ngIf="msg.status" [class.streaming]="msg.status === 'streaming'" [class.done]="msg.status === 'done'" [class.error]="msg.status === 'error'">
+              {{ msg.status }}
+            </span>
+          </div>
+          <pre>{{ msg.content || 'Waiting for first token...' }}</pre>
+          <p class="error" *ngIf="msg.error">{{ msg.error }}</p>
         </article>
-      </div>
-      <ng-template #noResponse>
-        <p class="muted">No response yet.</p>
+      </section>
+      <ng-template #noChat>
+        <p class="muted">Create or select a chat to start.</p>
       </ng-template>
+
+      <section class="composer">
+        <textarea
+          [(ngModel)]="prompt"
+          rows="4"
+          placeholder="Ask your question."
+        ></textarea>
+        <div class="actions">
+          <button class="primary" (click)="submit()" [disabled]="isStreaming">{{ isStreaming ? 'Streaming...' : 'Send' }}</button>
+          <button class="secondary" (click)="cancel()" [disabled]="!isStreaming">Stop</button>
+        </div>
+        <p class="error" *ngIf="error">{{ error }}</p>
+      </section>
     </section>
-  </section>
+  </main>
 </div>
 
 <div class="modal-backdrop" *ngIf="showSettings" (click)="closeSettings()"></div>
@@ -90,7 +129,6 @@
         type="text"
         [ngModel]="modelsToInput(config.openrouter.models)"
         (ngModelChange)="updateOpenRouterModels($event)"
-        placeholder="openai/gpt-4o-mini, anthropic/claude-3.5-sonnet"
       />
     </label>
   </article>
@@ -107,8 +145,40 @@
         type="text"
         [ngModel]="modelsToInput(config.ollama.models)"
         (ngModelChange)="updateOllamaModels($event)"
-        placeholder="llama3.2:latest, qwen2.5"
       />
     </label>
   </article>
+
+  <div class="actions">
+    <button class="primary" (click)="saveSettings()">Save</button>
+    <button class="secondary" (click)="closeSettings()">Cancel</button>
+  </div>
+</section>
+
+<div class="modal-backdrop" *ngIf="showFolderSettings" (click)="closeFolderSettings()"></div>
+<section class="modal" *ngIf="showFolderSettings" role="dialog" aria-modal="true">
+  <div class="row-head">
+    <h2>Folder Settings</h2>
+    <button class="secondary" (click)="closeFolderSettings()">Close</button>
+  </div>
+
+  <article class="config-block">
+    <label>
+      Folder Name
+      <input type="text" [(ngModel)]="folderSettingsName" />
+    </label>
+    <label>
+      System Prompt
+      <textarea rows="6" [(ngModel)]="folderSettingsPrompt" placeholder="Applied to all chats in this folder"></textarea>
+    </label>
+    <label>
+      Temperature (0-2, optional)
+      <input type="text" [(ngModel)]="folderSettingsTemperature" placeholder="e.g. 0.7" />
+    </label>
+  </article>
+
+  <div class="actions">
+    <button class="primary" (click)="saveFolderSettings()">Save</button>
+    <button class="secondary" (click)="closeFolderSettings()">Cancel</button>
+  </div>
 </section>

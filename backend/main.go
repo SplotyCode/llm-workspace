@@ -7,17 +7,37 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"llm-mux/backend/internal/providers"
+	"llm-mux/backend/internal/state"
 )
 
 type chatRequest struct {
+	ChatID  string                   `json:"chatId"`
 	Prompt  string                   `json:"prompt"`
 	Targets []providers.Target       `json:"targets"`
 	Config  providers.ProviderConfig `json:"config"`
+}
+
+type createFolderRequest struct {
+	Name         string `json:"name"`
+	SystemPrompt string `json:"systemPrompt"`
+	Temperature  *float64 `json:"temperature,omitempty"`
+}
+
+type updateFolderRequest struct {
+	Name         string `json:"name"`
+	SystemPrompt string `json:"systemPrompt"`
+	Temperature  *float64 `json:"temperature,omitempty"`
+}
+
+type createChatRequest struct {
+	FolderID string `json:"folderId"`
+	Title    string `json:"title"`
 }
 
 type providerInfo struct {
@@ -27,6 +47,11 @@ type providerInfo struct {
 }
 
 func main() {
+	store, err := state.New(filepath.Join("data", "state.json"))
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	mux := http.NewServeMux()
 	registry := map[string]providers.Adapter{
 		"openrouter": providers.NewOpenRouterAdapter(),
@@ -41,6 +66,112 @@ func main() {
 		writeJSON(w, http.StatusOK, map[string]any{"providers": providerCatalog()})
 	})
 
+	mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			writeJSON(w, http.StatusOK, store.GetConfig())
+		case http.MethodPut:
+			var cfg providers.ProviderConfig
+			if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+				return
+			}
+			if err := store.SetConfig(cfg); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, cfg)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+
+	mux.HandleFunc("/api/folders", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			writeJSON(w, http.StatusOK, map[string]any{"folders": store.ListFolders()})
+		case http.MethodPost:
+			var req createFolderRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+				return
+			}
+				folder, err := store.CreateFolder(req.Name, req.SystemPrompt, req.Temperature)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusCreated, folder)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+
+	mux.HandleFunc("/api/folders/", func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimPrefix(r.URL.Path, "/api/folders/")
+		if id == "" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if r.Method != http.MethodPatch {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req updateFolderRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+			return
+		}
+
+			folder, err := store.UpdateFolder(id, req.Name, req.SystemPrompt, req.Temperature)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, folder)
+	})
+
+	mux.HandleFunc("/api/chats", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			folderID := strings.TrimSpace(r.URL.Query().Get("folderId"))
+			writeJSON(w, http.StatusOK, map[string]any{"chats": store.ListChats(folderID)})
+		case http.MethodPost:
+			var req createChatRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+				return
+			}
+			chat, err := store.CreateChat(req.FolderID, req.Title)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusCreated, chat)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+
+	mux.HandleFunc("/api/chats/", func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimPrefix(r.URL.Path, "/api/chats/")
+		if id == "" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		chat, ok := store.GetChat(id)
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "chat not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, chat)
+	})
+
 	mux.HandleFunc("/api/chat/stream", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -53,7 +184,12 @@ func main() {
 			return
 		}
 
+		req.ChatID = strings.TrimSpace(req.ChatID)
 		req.Prompt = strings.TrimSpace(req.Prompt)
+		if req.ChatID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "chatId is required"})
+			return
+		}
 		if req.Prompt == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "prompt is required"})
 			return
@@ -63,6 +199,15 @@ func main() {
 			return
 		}
 
+		chat, ok := store.GetChat(req.ChatID)
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "chat not found"})
+			return
+		}
+		folder, _ := store.FindFolder(chat.FolderID)
+
+		effectiveConfig := mergeConfig(store.GetConfig(), req.Config)
+
 		for i := range req.Targets {
 			req.Targets[i].Provider = strings.ToLower(strings.TrimSpace(req.Targets[i].Provider))
 			req.Targets[i].Model = strings.TrimSpace(req.Targets[i].Model)
@@ -70,6 +215,18 @@ func main() {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "each target needs provider and model"})
 				return
 			}
+				if strings.TrimSpace(req.Targets[i].SystemPrompt) == "" {
+					req.Targets[i].SystemPrompt = strings.TrimSpace(folder.SystemPrompt)
+				}
+				if req.Targets[i].Temperature == nil && folder.Temperature != nil {
+					t := *folder.Temperature
+					req.Targets[i].Temperature = &t
+				}
+			}
+
+		if err := store.AppendUserPrompt(req.ChatID, req.Prompt); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
 		}
 
 		flusher, ok := w.(http.Flusher)
@@ -117,7 +274,7 @@ func main() {
 				targetID := t.Provider + ":" + t.Model
 
 				_ = emit(providers.StreamEvent{TargetID: targetID, Provider: t.Provider, Model: t.Model, Event: "start"})
-				err := a.Stream(ctx, providers.StreamRequest{Prompt: req.Prompt, Target: t, Config: req.Config}, emit)
+				err := a.Stream(ctx, providers.StreamRequest{Prompt: req.Prompt, Target: t, Config: effectiveConfig}, emit)
 				if err != nil && !errors.Is(err, context.Canceled) {
 					_ = emit(providers.StreamEvent{
 						TargetID: targetID,
@@ -136,8 +293,18 @@ func main() {
 			close(events)
 		}()
 
+		outputs := map[string]state.Message{}
 		enc := json.NewEncoder(w)
 		for ev := range events {
+			if ev.Event == "chunk" {
+				out := outputs[ev.TargetID]
+				out.TargetID = ev.TargetID
+				out.Provider = ev.Provider
+				out.Model = ev.Model
+				out.Content += ev.Content
+				outputs[ev.TargetID] = out
+			}
+
 			_, _ = fmt.Fprint(w, "event: message\n")
 			_, _ = fmt.Fprint(w, "data: ")
 			if err := enc.Encode(ev); err != nil {
@@ -145,6 +312,14 @@ func main() {
 			}
 			_, _ = fmt.Fprint(w, "\n")
 			flusher.Flush()
+		}
+
+		assistantMessages := make([]state.Message, 0, len(outputs))
+		for _, out := range outputs {
+			assistantMessages = append(assistantMessages, out)
+		}
+		if err := store.AppendAssistantMessages(req.ChatID, assistantMessages); err != nil {
+			log.Printf("persist assistant messages failed: %v", err)
 		}
 
 		_, _ = fmt.Fprint(w, "event: done\n")
@@ -169,31 +344,35 @@ func main() {
 
 func providerCatalog() []providerInfo {
 	return []providerInfo{
-		{
-			ID:   "openrouter",
-			Name: "OpenRouter",
-			Models: []string{
-				"openai/gpt-4o-mini",
-				"anthropic/claude-3.5-sonnet",
-				"meta-llama/llama-3.1-70b-instruct",
-			},
-		},
-		{
-			ID:   "ollama",
-			Name: "Ollama",
-			Models: []string{
-				"llama3.2:latest",
-				"qwen2.5",
-				"mistral",
-			},
-		},
+		{ID: "openrouter", Name: "OpenRouter", Models: []string{"openai/gpt-4o-mini", "anthropic/claude-3.5-sonnet", "meta-llama/llama-3.1-70b-instruct"}},
+		{ID: "ollama", Name: "Ollama", Models: []string{"llama3.2:latest", "qwen2.5", "mistral"}},
 	}
+}
+
+func mergeConfig(base, override providers.ProviderConfig) providers.ProviderConfig {
+	merged := base
+	if strings.TrimSpace(override.OpenRouter.APIKey) != "" {
+		merged.OpenRouter.APIKey = strings.TrimSpace(override.OpenRouter.APIKey)
+	}
+	if strings.TrimSpace(override.OpenRouter.BaseURL) != "" {
+		merged.OpenRouter.BaseURL = strings.TrimSpace(override.OpenRouter.BaseURL)
+	}
+	if strings.TrimSpace(override.Ollama.BaseURL) != "" {
+		merged.Ollama.BaseURL = strings.TrimSpace(override.Ollama.BaseURL)
+	}
+	if len(override.OpenRouter.Models) > 0 {
+		merged.OpenRouter.Models = override.OpenRouter.Models
+	}
+	if len(override.Ollama.Models) > 0 {
+		merged.Ollama.Models = override.Ollama.Models
+	}
+	return merged
 }
 
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

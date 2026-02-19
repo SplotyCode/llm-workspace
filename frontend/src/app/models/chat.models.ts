@@ -1,16 +1,3 @@
-export interface ProviderCatalog {
-  id: string;
-  name: string;
-  models: string[];
-}
-
-export interface ChatTarget {
-  provider: string;
-  model: string;
-  systemPrompt?: string;
-  temperature?: number;
-}
-
 export interface ProviderRuntimeConfig {
   openrouter: {
     apiKey: string;
@@ -23,16 +10,26 @@ export interface ProviderRuntimeConfig {
   };
 }
 
+export interface ChatTarget {
+  provider: string;
+  model: string;
+  systemPrompt?: string;
+  temperature?: number;
+}
+
 export interface ChatRequest {
+  chatId: string;
   prompt: string;
   targets: ChatTarget[];
   config: {
     openrouter?: {
       apiKey?: string;
       baseUrl?: string;
+      models?: string[];
     };
     ollama?: {
       baseUrl?: string;
+      models?: string[];
     };
   };
 }
@@ -46,12 +43,35 @@ export interface StreamEvent {
   error?: string;
 }
 
-export interface TargetResponse {
-  targetId: string;
-  provider: string;
-  model: string;
-  text: string;
-  status: 'queued' | 'streaming' | 'done' | 'error';
+export interface Folder {
+  id: string;
+  name: string;
+  systemPrompt: string;
+  temperature?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChatSummary {
+  id: string;
+  folderId: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Message {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  provider?: string;
+  model?: string;
+  targetId?: string;
+  status?: 'streaming' | 'done' | 'error';
   error?: string;
-  startedAt?: number;
+  createdAt: string;
+}
+
+export interface ChatDetail extends ChatSummary {
+  messages: Message[];
 }

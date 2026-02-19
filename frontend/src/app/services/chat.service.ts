@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import { ChatRequest, StreamEvent } from '../models/chat.models';
+import { ChatDetail, ChatRequest, ChatSummary, Folder, ProviderRuntimeConfig, StreamEvent } from '../models/chat.models';
 
 interface StreamCallbacks {
   onEvent: (event: StreamEvent) => void;
@@ -10,6 +10,114 @@ interface StreamCallbacks {
 @Injectable({ providedIn: 'root' })
 export class ChatService {
   private readonly baseUrl = 'http://localhost:8080';
+
+  async getConfig(): Promise<ProviderRuntimeConfig> {
+    const res = await fetch(`${this.baseUrl}/api/config`);
+    if (!res.ok) {
+      throw new Error(`Failed to load config (${res.status})`);
+    }
+    const raw = await res.json();
+    return {
+      openrouter: {
+        apiKey: raw.openrouter?.apiKey ?? '',
+        baseUrl: raw.openrouter?.baseUrl ?? 'https://openrouter.ai/api/v1',
+        models: raw.openrouter?.models ?? ['openai/gpt-4o-mini', 'anthropic/claude-3.5-sonnet']
+      },
+      ollama: {
+        baseUrl: raw.ollama?.baseUrl ?? 'http://localhost:11434',
+        models: raw.ollama?.models ?? ['llama3.2:latest', 'qwen2.5']
+      }
+    };
+  }
+
+  async saveConfig(config: ProviderRuntimeConfig): Promise<void> {
+    const payload = {
+      openrouter: {
+        apiKey: config.openrouter.apiKey,
+        baseUrl: config.openrouter.baseUrl,
+        models: config.openrouter.models
+      },
+      ollama: {
+        baseUrl: config.ollama.baseUrl,
+        models: config.ollama.models
+      }
+    };
+    const res = await fetch(`${this.baseUrl}/api/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(body || `Failed to save config (${res.status})`);
+    }
+  }
+
+  async getFolders(): Promise<Folder[]> {
+    const res = await fetch(`${this.baseUrl}/api/folders`);
+    if (!res.ok) {
+      throw new Error(`Failed to load folders (${res.status})`);
+    }
+    const data = await res.json();
+    return data.folders ?? [];
+  }
+
+  async createFolder(name: string, systemPrompt: string, temperature?: number): Promise<Folder> {
+    const res = await fetch(`${this.baseUrl}/api/folders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, systemPrompt, temperature })
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(body || `Failed to create folder (${res.status})`);
+    }
+    return (await res.json()) as Folder;
+  }
+
+  async updateFolder(folderId: string, name: string, systemPrompt: string, temperature?: number): Promise<Folder> {
+    const res = await fetch(`${this.baseUrl}/api/folders/${folderId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, systemPrompt, temperature })
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(body || `Failed to update folder (${res.status})`);
+    }
+    return (await res.json()) as Folder;
+  }
+
+  async getChats(folderId: string): Promise<ChatSummary[]> {
+    const res = await fetch(`${this.baseUrl}/api/chats?folderId=${encodeURIComponent(folderId)}`);
+    if (!res.ok) {
+      throw new Error(`Failed to load chats (${res.status})`);
+    }
+    const data = await res.json();
+    return data.chats ?? [];
+  }
+
+  async createChat(folderId: string, title = 'New Chat'): Promise<ChatSummary> {
+    const res = await fetch(`${this.baseUrl}/api/chats`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folderId, title })
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(body || `Failed to create chat (${res.status})`);
+    }
+    return (await res.json()) as ChatSummary;
+  }
+
+  async getChat(chatId: string): Promise<ChatDetail> {
+    const res = await fetch(`${this.baseUrl}/api/chats/${chatId}`);
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(body || `Failed to load chat (${res.status})`);
+    }
+    return (await res.json()) as ChatDetail;
+  }
 
   async streamChat(request: ChatRequest, callbacks: StreamCallbacks, signal?: AbortSignal): Promise<void> {
     const res = await fetch(`${this.baseUrl}/api/chat/stream`, {

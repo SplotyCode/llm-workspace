@@ -1,7 +1,7 @@
 import { CommonModule } from '@angular/common';
-import { Component } from '@angular/core';
+import { Component, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { ChatRequest, ProviderRuntimeConfig, StreamEvent, TargetResponse } from './models/chat.models';
+import { ChatDetail, ChatRequest, ChatSummary, Folder, Message, ProviderRuntimeConfig, StreamEvent } from './models/chat.models';
 import { ChatService } from './services/chat.service';
 
 @Component({
@@ -11,15 +11,26 @@ import { ChatService } from './services/chat.service';
   templateUrl: './app.component.html',
   styleUrl: './app.component.css'
 })
-export class AppComponent {
+export class AppComponent implements OnInit {
   prompt = '';
   isStreaming = false;
   error = '';
-  showSettings = false;
 
-  responses = new Map<string, TargetResponse>();
-  responseOrder: string[] = [];
-  private abortController?: AbortController;
+  showSettings = false;
+  showFolderSettings = false;
+
+  folders: Folder[] = [];
+  chats: ChatSummary[] = [];
+  selectedFolderId = '';
+  selectedChatId = '';
+  selectedChat: ChatDetail | null = null;
+
+  newFolderName = '';
+
+  folderSettingsFolderId = '';
+  folderSettingsName = '';
+  folderSettingsPrompt = '';
+  folderSettingsTemperature = '';
 
   config: ProviderRuntimeConfig = {
     openrouter: {
@@ -34,8 +45,19 @@ export class AppComponent {
   };
 
   selectedTargets = new Set<string>();
+  private liveAssistantIndexByTarget = new Map<string, number>();
+  private abortController?: AbortController;
 
   constructor(private readonly chatService: ChatService) {}
+
+  async ngOnInit(): Promise<void> {
+    try {
+      this.config = await this.chatService.getConfig();
+      await this.reloadFolders();
+    } catch (err) {
+      this.error = (err as Error).message;
+    }
+  }
 
   get quickTargets(): Array<{ id: string; provider: string; model: string }> {
     return [
@@ -44,8 +66,10 @@ export class AppComponent {
     ];
   }
 
-  get selectedTargetLabels(): string[] {
-    return this.quickTargets.filter((t) => this.selectedTargets.has(t.id)).map((t) => `${t.provider} · ${t.model}`);
+  providerIcon(provider: string): string {
+    if (provider === 'openrouter') return 'OR';
+    if (provider === 'ollama') return 'OL';
+    return 'LLM';
   }
 
   toggleTarget(targetId: string): void {
@@ -60,14 +84,80 @@ export class AppComponent {
     return this.selectedTargets.has(targetId);
   }
 
-  providerIcon(provider: string): string {
-    if (provider === 'openrouter') {
-      return 'OR';
+  async createFolder(): Promise<void> {
+    const name = this.newFolderName.trim();
+    if (!name) return;
+    try {
+      const folder = await this.chatService.createFolder(name, '', undefined);
+      this.newFolderName = '';
+      await this.reloadFolders(folder.id);
+    } catch (err) {
+      this.error = (err as Error).message;
     }
-    if (provider === 'ollama') {
-      return 'OL';
+  }
+
+  async selectFolder(folderId: string): Promise<void> {
+    this.selectedFolderId = folderId;
+    await this.reloadChats();
+  }
+
+  openFolderSettings(folder: Folder, event?: MouseEvent): void {
+    event?.stopPropagation();
+    this.folderSettingsFolderId = folder.id;
+    this.folderSettingsName = folder.name;
+    this.folderSettingsPrompt = folder.systemPrompt;
+    this.folderSettingsTemperature = folder.temperature == null ? '' : String(folder.temperature);
+    this.showFolderSettings = true;
+  }
+
+  closeFolderSettings(): void {
+    this.showFolderSettings = false;
+    this.folderSettingsFolderId = '';
+    this.folderSettingsName = '';
+    this.folderSettingsPrompt = '';
+    this.folderSettingsTemperature = '';
+  }
+
+  async saveFolderSettings(): Promise<void> {
+    if (!this.folderSettingsFolderId) return;
+
+    const parsed = this.parseTemperature(this.folderSettingsTemperature);
+    if (parsed === null) {
+      this.error = 'Temperature must be a number between 0 and 2.';
+      return;
     }
-    return 'LLM';
+
+    try {
+      await this.chatService.updateFolder(
+        this.folderSettingsFolderId,
+        this.folderSettingsName,
+        this.folderSettingsPrompt,
+        parsed
+      );
+      await this.reloadFolders(this.folderSettingsFolderId);
+      this.closeFolderSettings();
+    } catch (err) {
+      this.error = (err as Error).message;
+    }
+  }
+
+  async createChat(): Promise<void> {
+    if (!this.selectedFolderId) return;
+    try {
+      const chat = await this.chatService.createChat(this.selectedFolderId, 'New Chat');
+      await this.reloadChats(chat.id);
+    } catch (err) {
+      this.error = (err as Error).message;
+    }
+  }
+
+  async selectChat(chatId: string): Promise<void> {
+    this.selectedChatId = chatId;
+    try {
+      this.selectedChat = await this.chatService.getChat(chatId);
+    } catch (err) {
+      this.error = (err as Error).message;
+    }
   }
 
   async submit(): Promise<void> {
@@ -79,25 +169,45 @@ export class AppComponent {
       return;
     }
     if (targets.length === 0) {
-      this.error = 'Choose at least one LLM in Quick Selector or Settings.';
+      this.error = 'Choose at least one LLM in Quick Selector.';
+      return;
+    }
+    if (!this.selectedFolderId) {
+      this.error = 'Choose a folder first.';
       return;
     }
 
-    this.responses.clear();
-    this.responseOrder = [];
+    if (!this.selectedChatId) {
+      await this.createChat();
+      if (!this.selectedChatId) return;
+    }
+
+    const userPrompt = this.prompt.trim();
+    this.prompt = '';
     this.isStreaming = true;
+    this.liveAssistantIndexByTarget.clear();
     this.abortController = new AbortController();
 
+    this.pushLocalMessage({
+      id: `tmp_user_${Date.now()}`,
+      role: 'user',
+      content: userPrompt,
+      createdAt: new Date().toISOString()
+    });
+
     const request: ChatRequest = {
-      prompt: this.prompt.trim(),
+      chatId: this.selectedChatId,
+      prompt: userPrompt,
       targets,
       config: {
         openrouter: {
           apiKey: this.config.openrouter.apiKey.trim(),
-          baseUrl: this.config.openrouter.baseUrl.trim()
+          baseUrl: this.config.openrouter.baseUrl.trim(),
+          models: this.config.openrouter.models
         },
         ollama: {
-          baseUrl: this.config.ollama.baseUrl.trim()
+          baseUrl: this.config.ollama.baseUrl.trim(),
+          models: this.config.ollama.models
         }
       }
     };
@@ -113,6 +223,7 @@ export class AppComponent {
           },
           onComplete: () => {
             this.isStreaming = false;
+            void this.refreshAfterStream();
           }
         },
         this.abortController.signal
@@ -136,6 +247,15 @@ export class AppComponent {
     this.showSettings = false;
   }
 
+  async saveSettings(): Promise<void> {
+    try {
+      await this.chatService.saveConfig(this.config);
+      this.showSettings = false;
+    } catch (err) {
+      this.error = (err as Error).message;
+    }
+  }
+
   parseModels(value: string): string[] {
     return value
       .split(',')
@@ -157,18 +277,64 @@ export class AppComponent {
     this.cleanupSelectedTargets();
   }
 
-  get responseCards(): TargetResponse[] {
-    return this.responseOrder
-      .map((id) => this.responses.get(id))
-      .filter((value): value is TargetResponse => Boolean(value));
+  private async reloadFolders(preferredFolderId?: string): Promise<void> {
+    this.folders = await this.chatService.getFolders();
+    if (this.folders.length === 0) return;
+
+    if (preferredFolderId && this.folders.some((f) => f.id === preferredFolderId)) {
+      this.selectedFolderId = preferredFolderId;
+    } else if (!this.selectedFolderId || !this.folders.some((f) => f.id === this.selectedFolderId)) {
+      this.selectedFolderId = this.folders[0].id;
+    }
+
+    await this.reloadChats();
+  }
+
+  private async reloadChats(preferredChatId?: string): Promise<void> {
+    if (!this.selectedFolderId) {
+      this.chats = [];
+      this.selectedChat = null;
+      this.selectedChatId = '';
+      return;
+    }
+
+    this.chats = await this.chatService.getChats(this.selectedFolderId);
+
+    if (preferredChatId && this.chats.some((c) => c.id === preferredChatId)) {
+      this.selectedChatId = preferredChatId;
+    } else if (!this.selectedChatId || !this.chats.some((c) => c.id === this.selectedChatId)) {
+      this.selectedChatId = this.chats[0]?.id ?? '';
+    }
+
+    if (this.selectedChatId) {
+      await this.selectChat(this.selectedChatId);
+    } else {
+      this.selectedChat = null;
+    }
+  }
+
+  private pushLocalMessage(message: Message): void {
+    if (!this.selectedChat) {
+      this.selectedChat = {
+        id: this.selectedChatId,
+        folderId: this.selectedFolderId,
+        title: 'New Chat',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        messages: []
+      };
+    }
+    this.selectedChat.messages = [...this.selectedChat.messages, message];
+  }
+
+  private async refreshAfterStream(): Promise<void> {
+    await this.reloadChats(this.selectedChatId);
   }
 
   private cleanupSelectedTargets(): void {
     const valid = new Set(this.quickTargets.map((t) => t.id));
     this.selectedTargets.forEach((id) => {
-      if (!valid.has(id)) {
-        this.selectedTargets.delete(id);
-      }
+      if (!valid.has(id)) this.selectedTargets.delete(id);
     });
   }
 
@@ -177,9 +343,7 @@ export class AppComponent {
     for (const targetId of this.selectedTargets) {
       const [provider, ...modelParts] = targetId.split(':');
       const model = modelParts.join(':').trim();
-      if (!provider || !model) {
-        continue;
-      }
+      if (!provider || !model) continue;
       targets.push({ provider, model });
     }
     return targets;
@@ -191,40 +355,58 @@ export class AppComponent {
       return;
     }
 
-    const id = event.targetId;
-    let current = this.responses.get(id);
-    if (!current) {
-      current = {
-        targetId: id,
-        provider: event.provider,
-        model: event.model,
-        text: '',
-        status: 'queued'
-      };
-      this.responses.set(id, current);
-      this.responseOrder.push(id);
-    }
+    if (!this.selectedChat) return;
+
+    const idx = this.liveAssistantIndexByTarget.get(event.targetId);
 
     if (event.event === 'start') {
-      current.status = 'streaming';
-      current.startedAt = Date.now();
+      const message: Message = {
+        id: `tmp_assistant_${event.targetId}_${Date.now()}`,
+        role: 'assistant',
+        content: '',
+        provider: event.provider,
+        model: event.model,
+        targetId: event.targetId,
+        status: 'streaming',
+        createdAt: new Date().toISOString()
+      };
+      this.selectedChat.messages = [...this.selectedChat.messages, message];
+      this.liveAssistantIndexByTarget.set(event.targetId, this.selectedChat.messages.length - 1);
       return;
     }
 
+    if (idx == null || idx < 0 || idx >= this.selectedChat.messages.length) return;
+
+    const msg = this.selectedChat.messages[idx];
+
     if (event.event === 'chunk') {
-      current.status = 'streaming';
-      current.text += event.content ?? '';
+      msg.status = 'streaming';
+      msg.content += event.content ?? '';
+      this.selectedChat.messages = [...this.selectedChat.messages];
       return;
     }
 
     if (event.event === 'error') {
-      current.status = 'error';
-      current.error = event.error ?? 'unknown error';
+      msg.status = 'error';
+      msg.error = event.error ?? 'unknown error';
+      if (!msg.content.trim()) {
+        msg.content = `Error: ${msg.error}`;
+      }
+      this.selectedChat.messages = [...this.selectedChat.messages];
       return;
     }
 
-    if (event.event === 'end' && current.status !== 'error') {
-      current.status = 'done';
+    if (event.event === 'end') {
+      if (msg.status !== 'error') msg.status = 'done';
+      this.selectedChat.messages = [...this.selectedChat.messages];
     }
+  }
+
+  private parseTemperature(input: string): number | undefined | null {
+    const v = input.trim();
+    if (!v) return undefined;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0 || n > 2) return null;
+    return n;
   }
 }

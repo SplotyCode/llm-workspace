@@ -10,12 +10,14 @@ type Target struct {
 }
 
 type OpenRouterConfig struct {
-	APIKey  string `json:"apiKey,omitempty"`
-	BaseURL string `json:"baseUrl,omitempty"`
+	APIKey  string   `json:"apiKey,omitempty"`
+	BaseURL string   `json:"baseUrl,omitempty"`
+	Models  []string `json:"models,omitempty"`
 }
 
 type OllamaConfig struct {
-	BaseURL string `json:"baseUrl,omitempty"`
+	BaseURL string   `json:"baseUrl,omitempty"`
+	Models  []string `json:"models,omitempty"`
 }
 
 type ProviderConfig struct {
