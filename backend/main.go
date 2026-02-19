@@ -50,6 +50,17 @@ type updateMessageRequest struct {
 	ScopeID   string `json:"scopeId,omitempty"`
 }
 
+type forkChatRequest struct {
+	MessageID string `json:"messageId"`
+	Title     string `json:"title"`
+}
+
+type regenerateRequest struct {
+	MessageID string                   `json:"messageId"`
+	Targets   []providers.Target       `json:"targets"`
+	Config    providers.ProviderConfig `json:"config"`
+}
+
 type providerInfo struct {
 	ID     string   `json:"id"`
 	Name   string   `json:"name"`
@@ -191,6 +202,93 @@ func main() {
 			return
 		}
 
+		if len(parts) == 2 && parts[1] == "fork" {
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			var req forkChatRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+				return
+			}
+			chat, err := store.ForkChatFromMessage(parts[0], strings.TrimSpace(req.MessageID), req.Title)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusCreated, chat)
+			return
+		}
+
+		if len(parts) == 2 && parts[1] == "regenerate" {
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			var req regenerateRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+				return
+			}
+			req.MessageID = strings.TrimSpace(req.MessageID)
+			if req.MessageID == "" {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "messageId is required"})
+				return
+			}
+			effectiveConfig := mergeConfig(store.GetConfig(), req.Config)
+
+			chat, prompt, history, assistantMsg, assistantErr := store.PrepareAssistantRegenerate(parts[0], req.MessageID)
+			if assistantErr == nil {
+				folder, _ := store.FindFolder(chat.FolderID)
+				target := providers.Target{
+					Provider: strings.ToLower(strings.TrimSpace(assistantMsg.Provider)),
+					Model:    strings.TrimSpace(assistantMsg.Model),
+				}
+				if strings.TrimSpace(target.Provider) == "" || strings.TrimSpace(target.Model) == "" {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": "assistant message is missing provider/model"})
+					return
+				}
+				target.SystemPrompt = strings.TrimSpace(folder.SystemPrompt)
+				if folder.Temperature != nil {
+					t := *folder.Temperature
+					target.Temperature = &t
+				}
+				runStreaming(w, r, registry, parts[0], prompt, []providers.Target{target}, effectiveConfig, history, store, req.MessageID)
+				return
+			}
+
+			if len(req.Targets) == 0 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at least one target is required"})
+				return
+			}
+
+			chat, prompt, history, err := store.PrepareRegenerate(parts[0], req.MessageID)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			folder, _ := store.FindFolder(chat.FolderID)
+			for i := range req.Targets {
+				req.Targets[i].Provider = strings.ToLower(strings.TrimSpace(req.Targets[i].Provider))
+				req.Targets[i].Model = strings.TrimSpace(req.Targets[i].Model)
+				if req.Targets[i].Provider == "" || req.Targets[i].Model == "" {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": "each target needs provider and model"})
+					return
+				}
+				if strings.TrimSpace(req.Targets[i].SystemPrompt) == "" {
+					req.Targets[i].SystemPrompt = strings.TrimSpace(folder.SystemPrompt)
+				}
+				if req.Targets[i].Temperature == nil && folder.Temperature != nil {
+					t := *folder.Temperature
+					req.Targets[i].Temperature = &t
+				}
+			}
+
+			runStreaming(w, r, registry, parts[0], prompt, req.Targets, effectiveConfig, history, store, "")
+			return
+		}
+
 		if len(parts) != 1 {
 			w.WriteHeader(http.StatusNotFound)
 			return
@@ -274,111 +372,12 @@ func main() {
 				}
 			}
 
-		if err := store.AppendUserPrompt(req.ChatID, req.Prompt); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming unsupported"})
-			return
-		}
-
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		w.Header().Set("X-Accel-Buffering", "no")
-
-		ctx, cancel := context.WithCancel(r.Context())
-		defer cancel()
-
-		events := make(chan providers.StreamEvent, 256)
-		var wg sync.WaitGroup
-
-		emit := func(ev providers.StreamEvent) error {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case events <- ev:
-				return nil
-			}
-		}
-
-			for _, target := range req.Targets {
-				adapter, exists := registry[target.Provider]
-			if !exists {
-				_ = emit(providers.StreamEvent{
-					TargetID: target.Provider + ":" + target.Model,
-					Provider: target.Provider,
-					Model:    target.Model,
-					Event:    "error",
-					Error:    "unsupported provider",
-				})
-				continue
-			}
-
-				wg.Add(1)
-				go func(t providers.Target, a providers.Adapter) {
-					defer wg.Done()
-					targetID := t.Provider + ":" + t.Model
-					history := buildTargetHistory(chat.Messages, targetID)
-
-					_ = emit(providers.StreamEvent{TargetID: targetID, Provider: t.Provider, Model: t.Model, Event: "start"})
-					err := a.Stream(ctx, providers.StreamRequest{Prompt: req.Prompt, Target: t, Config: effectiveConfig, History: history}, emit)
-					if err != nil && !errors.Is(err, context.Canceled) {
-					_ = emit(providers.StreamEvent{
-						TargetID: targetID,
-						Provider: t.Provider,
-						Model:    t.Model,
-						Event:    "error",
-						Error:    err.Error(),
-					})
-				}
-				_ = emit(providers.StreamEvent{TargetID: targetID, Provider: t.Provider, Model: t.Model, Event: "end"})
-			}(target, adapter)
-		}
-
-		go func() {
-			wg.Wait()
-			close(events)
-		}()
-
-		outputs := map[string]state.Message{}
-		enc := json.NewEncoder(w)
-			for ev := range events {
-				if ev.Event == "chunk" {
-					out := outputs[ev.TargetID]
-					out.TargetID = ev.TargetID
-					out.Provider = ev.Provider
-					out.Model = ev.Model
-					out.Inclusion = "model_only"
-					out.ScopeID = ev.TargetID
-					out.Content += ev.Content
-					outputs[ev.TargetID] = out
-				}
-
-			_, _ = fmt.Fprint(w, "event: message\n")
-			_, _ = fmt.Fprint(w, "data: ")
-			if err := enc.Encode(ev); err != nil {
+			if err := store.AppendUserPrompt(req.ChatID, req.Prompt); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 				return
 			}
-			_, _ = fmt.Fprint(w, "\n")
-			flusher.Flush()
-		}
-
-		assistantMessages := make([]state.Message, 0, len(outputs))
-		for _, out := range outputs {
-			assistantMessages = append(assistantMessages, out)
-		}
-		if err := store.AppendAssistantMessages(req.ChatID, assistantMessages); err != nil {
-			log.Printf("persist assistant messages failed: %v", err)
-		}
-
-		_, _ = fmt.Fprint(w, "event: done\n")
-		_, _ = fmt.Fprint(w, "data: {\"event\":\"done\"}\n\n")
-		flusher.Flush()
-	})
+			runStreaming(w, r, registry, req.ChatID, req.Prompt, req.Targets, effectiveConfig, chat.Messages, store, "")
+		})
 
 	server := &http.Server{
 		Addr:              ":8080",
@@ -464,6 +463,127 @@ func messageIncludedForTarget(msg state.Message, targetID string) bool {
 		}
 		return true
 	}
+}
+
+func runStreaming(
+	w http.ResponseWriter,
+	r *http.Request,
+	registry map[string]providers.Adapter,
+	chatID string,
+	prompt string,
+	targets []providers.Target,
+	effectiveConfig providers.ProviderConfig,
+	baseHistory []state.Message,
+	store *state.Store,
+	replaceMessageID string,
+) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming unsupported"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	events := make(chan providers.StreamEvent, 256)
+	var wg sync.WaitGroup
+
+	emit := func(ev providers.StreamEvent) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case events <- ev:
+			return nil
+		}
+	}
+
+	for _, target := range targets {
+		adapter, exists := registry[target.Provider]
+		if !exists {
+			_ = emit(providers.StreamEvent{
+				TargetID: target.Provider + ":" + target.Model,
+				Provider: target.Provider,
+				Model:    target.Model,
+				Event:    "error",
+				Error:    "unsupported provider",
+			})
+			continue
+		}
+
+		wg.Add(1)
+		go func(t providers.Target, a providers.Adapter) {
+			defer wg.Done()
+			targetID := t.Provider + ":" + t.Model
+			history := buildTargetHistory(baseHistory, targetID)
+
+			_ = emit(providers.StreamEvent{TargetID: targetID, Provider: t.Provider, Model: t.Model, Event: "start"})
+			err := a.Stream(ctx, providers.StreamRequest{Prompt: prompt, Target: t, Config: effectiveConfig, History: history}, emit)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				_ = emit(providers.StreamEvent{
+					TargetID: targetID,
+					Provider: t.Provider,
+					Model:    t.Model,
+					Event:    "error",
+					Error:    err.Error(),
+				})
+			}
+			_ = emit(providers.StreamEvent{TargetID: targetID, Provider: t.Provider, Model: t.Model, Event: "end"})
+		}(target, adapter)
+	}
+
+	go func() {
+		wg.Wait()
+		close(events)
+	}()
+
+	outputs := map[string]state.Message{}
+	enc := json.NewEncoder(w)
+	for ev := range events {
+		if ev.Event == "chunk" {
+			out := outputs[ev.TargetID]
+			out.TargetID = ev.TargetID
+			out.Provider = ev.Provider
+			out.Model = ev.Model
+			out.Inclusion = "model_only"
+			out.ScopeID = ev.TargetID
+			out.Content += ev.Content
+			outputs[ev.TargetID] = out
+		}
+
+		_, _ = fmt.Fprint(w, "event: message\n")
+		_, _ = fmt.Fprint(w, "data: ")
+		if err := enc.Encode(ev); err != nil {
+			return
+		}
+		_, _ = fmt.Fprint(w, "\n")
+		flusher.Flush()
+	}
+
+	assistantMessages := make([]state.Message, 0, len(outputs))
+	for _, out := range outputs {
+		assistantMessages = append(assistantMessages, out)
+	}
+	if replaceMessageID != "" {
+		if len(assistantMessages) > 0 {
+			if err := store.ReplaceAssistantMessage(chatID, replaceMessageID, assistantMessages[0]); err != nil {
+				log.Printf("replace assistant message failed: %v", err)
+			}
+		}
+	} else {
+		if err := store.AppendAssistantMessages(chatID, assistantMessages); err != nil {
+			log.Printf("persist assistant messages failed: %v", err)
+		}
+	}
+
+	_, _ = fmt.Fprint(w, "event: done\n")
+	_, _ = fmt.Fprint(w, "data: {\"event\":\"done\"}\n\n")
+	flusher.Flush()
 }
 
 func withCORS(next http.Handler) http.Handler {

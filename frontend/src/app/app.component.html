@@ -1,4 +1,4 @@
-<div class="page">
+<div class="page" (click)="closeMessageMenu()">
   <header class="topbar">
     <div>
       <h1>LLM Workspace</h1>
@@ -113,6 +113,20 @@
             <span class="status" *ngIf="msg.status" [class.streaming]="msg.status === 'streaming'" [class.done]="msg.status === 'done'" [class.error]="msg.status === 'error'">
               {{ msg.status }}
             </span>
+            <div class="msg-menu-wrap" (click)="$event.stopPropagation()">
+              <button
+                type="button"
+                class="msg-menu-btn"
+                aria-label="Message actions"
+                (click)="toggleMessageMenu(msg.id, $event)"
+              >
+                ⋯
+              </button>
+              <div class="msg-menu" *ngIf="openMessageMenuId === msg.id">
+                <button type="button" (click)="regenerateFromMessage(msg)">Regenerate</button>
+                <button type="button" (click)="forkFromMessage(msg)">Fork chat from here</button>
+              </div>
+            </div>
           </div>
           <pre>{{ msg.content || 'Waiting for first token...' }}</pre>
           <p class="error" *ngIf="msg.error">{{ msg.error }}</p>

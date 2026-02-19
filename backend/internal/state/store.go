@@ -307,6 +307,184 @@ func (s *Store) UpdateChat(id, title, folderID string) (Chat, error) {
 	return Chat{}, errors.New("chat not found")
 }
 
+func (s *Store) ForkChatFromMessage(chatID, messageID, title string) (Chat, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sourceIdx := -1
+	for i := range s.data.Chats {
+		if s.data.Chats[i].ID == chatID {
+			sourceIdx = i
+			break
+		}
+	}
+	if sourceIdx < 0 {
+		return Chat{}, errors.New("chat not found")
+	}
+
+	msgIdx := indexOfMessage(s.data.Chats[sourceIdx].Messages, messageID)
+	if msgIdx < 0 {
+		return Chat{}, errors.New("message not found")
+	}
+
+	now := time.Now().UTC()
+	if strings.TrimSpace(title) == "" {
+		title = s.data.Chats[sourceIdx].Title + " (Fork)"
+	}
+
+	cloned := cloneMessages(s.data.Chats[sourceIdx].Messages[:msgIdx+1])
+	chat := Chat{
+		ID:        newID("cht"),
+		FolderID:  s.data.Chats[sourceIdx].FolderID,
+		Title:     strings.TrimSpace(title),
+		Messages:  cloned,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	s.data.Chats = append(s.data.Chats, chat)
+	if err := s.touchFolderLocked(chat.FolderID); err != nil {
+		return Chat{}, err
+	}
+	if err := s.persistLocked(); err != nil {
+		return Chat{}, err
+	}
+	return chat, nil
+}
+
+func (s *Store) PrepareRegenerate(chatID, messageID string) (chat Chat, prompt string, history []Message, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	chatIdx := -1
+	for i := range s.data.Chats {
+		if s.data.Chats[i].ID == chatID {
+			chatIdx = i
+			break
+		}
+	}
+	if chatIdx < 0 {
+		return Chat{}, "", nil, errors.New("chat not found")
+	}
+
+	msgIdx := indexOfMessage(s.data.Chats[chatIdx].Messages, messageID)
+	if msgIdx < 0 {
+		return Chat{}, "", nil, errors.New("message not found")
+	}
+
+	userIdx := -1
+	if s.data.Chats[chatIdx].Messages[msgIdx].Role == "user" {
+		userIdx = msgIdx
+	} else {
+		for i := msgIdx; i >= 0; i-- {
+			if s.data.Chats[chatIdx].Messages[i].Role == "user" {
+				userIdx = i
+				break
+			}
+		}
+	}
+	if userIdx < 0 {
+		return Chat{}, "", nil, errors.New("no user prompt found before message")
+	}
+
+	prompt = s.data.Chats[chatIdx].Messages[userIdx].Content
+	history = cloneMessages(s.data.Chats[chatIdx].Messages[:userIdx])
+	s.data.Chats[chatIdx].Messages = cloneMessages(s.data.Chats[chatIdx].Messages[:userIdx+1])
+	s.data.Chats[chatIdx].UpdatedAt = time.Now().UTC()
+	if err := s.touchFolderLocked(s.data.Chats[chatIdx].FolderID); err != nil {
+		return Chat{}, "", nil, err
+	}
+	if err := s.persistLocked(); err != nil {
+		return Chat{}, "", nil, err
+	}
+	return s.data.Chats[chatIdx], prompt, history, nil
+}
+
+func (s *Store) PrepareAssistantRegenerate(chatID, messageID string) (chat Chat, prompt string, history []Message, target Message, err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	chatIdx := -1
+	for i := range s.data.Chats {
+		if s.data.Chats[i].ID == chatID {
+			chatIdx = i
+			break
+		}
+	}
+	if chatIdx < 0 {
+		return Chat{}, "", nil, Message{}, errors.New("chat not found")
+	}
+
+	msgIdx := indexOfMessage(s.data.Chats[chatIdx].Messages, messageID)
+	if msgIdx < 0 {
+		return Chat{}, "", nil, Message{}, errors.New("message not found")
+	}
+
+	target = s.data.Chats[chatIdx].Messages[msgIdx]
+	if target.Role != "assistant" {
+		return Chat{}, "", nil, Message{}, errors.New("message is not assistant")
+	}
+	if strings.TrimSpace(target.Provider) == "" || strings.TrimSpace(target.Model) == "" {
+		return Chat{}, "", nil, Message{}, errors.New("assistant message is missing provider/model")
+	}
+
+	userIdx := -1
+	for i := msgIdx; i >= 0; i-- {
+		if s.data.Chats[chatIdx].Messages[i].Role == "user" {
+			userIdx = i
+			break
+		}
+	}
+	if userIdx < 0 {
+		return Chat{}, "", nil, Message{}, errors.New("no user prompt found before message")
+	}
+
+	prompt = s.data.Chats[chatIdx].Messages[userIdx].Content
+	history = cloneMessages(s.data.Chats[chatIdx].Messages[:userIdx])
+	chat = s.data.Chats[chatIdx]
+	return chat, prompt, history, target, nil
+}
+
+func (s *Store) ReplaceAssistantMessage(chatID, messageID string, replacement Message) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.data.Chats {
+		if s.data.Chats[i].ID != chatID {
+			continue
+		}
+		for j := range s.data.Chats[i].Messages {
+			if s.data.Chats[i].Messages[j].ID != messageID {
+				continue
+			}
+			orig := s.data.Chats[i].Messages[j]
+			s.data.Chats[i].Messages[j].Role = "assistant"
+			s.data.Chats[i].Messages[j].Content = replacement.Content
+			s.data.Chats[i].Messages[j].Provider = replacement.Provider
+			s.data.Chats[i].Messages[j].Model = replacement.Model
+			s.data.Chats[i].Messages[j].TargetID = replacement.TargetID
+			s.data.Chats[i].Messages[j].Inclusion = replacement.Inclusion
+			s.data.Chats[i].Messages[j].ScopeID = replacement.ScopeID
+			s.data.Chats[i].Messages[j].CreatedAt = time.Now().UTC()
+			if s.data.Chats[i].Messages[j].Inclusion == "" {
+				s.data.Chats[i].Messages[j].Inclusion = "model_only"
+			}
+			if s.data.Chats[i].Messages[j].ScopeID == "" {
+				s.data.Chats[i].Messages[j].ScopeID = s.data.Chats[i].Messages[j].TargetID
+			}
+			if orig.Role != "assistant" {
+				return errors.New("target message is not assistant")
+			}
+			s.data.Chats[i].UpdatedAt = time.Now().UTC()
+			if err := s.touchFolderLocked(s.data.Chats[i].FolderID); err != nil {
+				return err
+			}
+			return s.persistLocked()
+		}
+		return errors.New("message not found")
+	}
+	return errors.New("chat not found")
+}
+
 func (s *Store) AppendUserPrompt(chatID, prompt string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -414,6 +592,23 @@ func normalizeInclusion(v string) string {
 	default:
 		return ""
 	}
+}
+
+func indexOfMessage(messages []Message, messageID string) int {
+	for i := range messages {
+		if messages[i].ID == messageID {
+			return i
+		}
+	}
+	return -1
+}
+
+func cloneMessages(messages []Message) []Message {
+	out := make([]Message, 0, len(messages))
+	for _, m := range messages {
+		out = append(out, m)
+	}
+	return out
 }
 
 func (s *Store) touchFolderLocked(folderID string) error {

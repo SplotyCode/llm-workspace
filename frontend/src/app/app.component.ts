@@ -48,6 +48,8 @@ export class AppComponent implements OnInit {
   selectedTargets = new Set<string>();
   private liveAssistantIndexByTarget = new Map<string, number>();
   private abortController?: AbortController;
+  openMessageMenuId = '';
+  regeneratingMessageId = '';
   draggingChatId = '';
   dropFolderId = '';
   editingChatId = '';
@@ -307,6 +309,7 @@ export class AppComponent implements OnInit {
   cancel(): void {
     this.abortController?.abort();
     this.isStreaming = false;
+    this.regeneratingMessageId = '';
   }
 
   openSettings(): void {
@@ -391,6 +394,89 @@ export class AppComponent implements OnInit {
   messageInclusionValue(message: Message): 'dont_include' | 'model_only' | 'always' {
     const raw = this.normalizeInclusion(message.inclusion ?? '');
     return this.normalizeInclusionForMessage(message, raw || (message.role === 'assistant' ? 'model_only' : 'always'));
+  }
+
+  toggleMessageMenu(messageId: string, event?: MouseEvent): void {
+    event?.stopPropagation();
+    this.openMessageMenuId = this.openMessageMenuId === messageId ? '' : messageId;
+  }
+
+  closeMessageMenu(): void {
+    this.openMessageMenuId = '';
+  }
+
+  async forkFromMessage(message: Message): Promise<void> {
+    if (!this.selectedChatId) {
+      return;
+    }
+    this.closeMessageMenu();
+    try {
+      const fork = await this.chatService.forkChat(this.selectedChatId, message.id);
+      await this.reloadFolders(fork.folderId);
+      await this.reloadChats(fork.id);
+    } catch (err) {
+      this.error = (err as Error).message;
+    }
+  }
+
+  async regenerateFromMessage(message: Message): Promise<void> {
+    if (!this.selectedChatId || this.isStreaming) {
+      return;
+    }
+    let targets = this.buildTargets();
+    if (message.role === 'assistant' && message.provider && message.model) {
+      targets = [{ provider: message.provider, model: message.model }];
+      this.regeneratingMessageId = message.id;
+    } else {
+      this.regeneratingMessageId = '';
+      if (targets.length === 0) {
+        this.error = 'Choose at least one LLM in Quick Selector.';
+        return;
+      }
+    }
+
+    this.closeMessageMenu();
+    this.isStreaming = true;
+    this.liveAssistantIndexByTarget.clear();
+    this.abortController = new AbortController();
+
+    try {
+      await this.chatService.regenerateFromMessage(
+        this.selectedChatId,
+        message.id,
+        {
+          targets,
+          config: {
+            openrouter: {
+              apiKey: this.config.openrouter.apiKey.trim(),
+              baseUrl: this.config.openrouter.baseUrl.trim(),
+              models: this.config.openrouter.models
+            },
+            ollama: {
+              baseUrl: this.config.ollama.baseUrl.trim(),
+              models: this.config.ollama.models
+            }
+          }
+        },
+        {
+          onEvent: (event) => this.handleEvent(event),
+          onError: (err) => {
+            this.error = err.message;
+            this.isStreaming = false;
+          },
+          onComplete: () => {
+            this.isStreaming = false;
+            this.regeneratingMessageId = '';
+            void this.refreshAfterStream();
+          }
+        },
+        this.abortController.signal
+      );
+    } catch (err) {
+      this.error = (err as Error).message;
+      this.isStreaming = false;
+      this.regeneratingMessageId = '';
+    }
   }
 
   inclusionOptionTitle(value: 'dont_include' | 'model_only' | 'always'): string {
@@ -486,6 +572,24 @@ export class AppComponent implements OnInit {
     const idx = this.liveAssistantIndexByTarget.get(event.targetId);
 
     if (event.event === 'start') {
+      if (this.regeneratingMessageId) {
+        const replaceIdx = this.selectedChat.messages.findIndex((m) => m.id === this.regeneratingMessageId);
+        if (replaceIdx >= 0) {
+          const existing = this.selectedChat.messages[replaceIdx];
+          existing.provider = event.provider;
+          existing.model = event.model;
+          existing.targetId = event.targetId;
+          existing.inclusion = 'model_only';
+          existing.scopeId = event.targetId;
+          existing.status = 'streaming';
+          existing.error = '';
+          existing.content = '';
+          this.selectedChat.messages = [...this.selectedChat.messages];
+          this.liveAssistantIndexByTarget.set(event.targetId, replaceIdx);
+          return;
+        }
+      }
+
       const message: Message = {
         id: `tmp_assistant_${event.targetId}_${Date.now()}`,
         role: 'assistant',

@@ -148,11 +148,48 @@ export class ChatService {
     }
   }
 
-  async streamChat(request: ChatRequest, callbacks: StreamCallbacks, signal?: AbortSignal): Promise<void> {
-    const res = await fetch(`${this.baseUrl}/api/chat/stream`, {
+  async forkChat(chatId: string, messageId: string, title = ''): Promise<ChatSummary> {
+    const res = await fetch(`${this.baseUrl}/api/chats/${chatId}/fork`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
+      body: JSON.stringify({ messageId, title })
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(body || `Failed to fork chat (${res.status})`);
+    }
+    return (await res.json()) as ChatSummary;
+  }
+
+  async regenerateFromMessage(
+    chatId: string,
+    messageId: string,
+    request: Omit<ChatRequest, 'chatId' | 'prompt'>,
+    callbacks: StreamCallbacks,
+    signal?: AbortSignal
+  ): Promise<void> {
+    await this.streamFromEndpoint(
+      `${this.baseUrl}/api/chats/${chatId}/regenerate`,
+      { messageId, targets: request.targets, config: request.config },
+      callbacks,
+      signal
+    );
+  }
+
+  async streamChat(request: ChatRequest, callbacks: StreamCallbacks, signal?: AbortSignal): Promise<void> {
+    await this.streamFromEndpoint(`${this.baseUrl}/api/chat/stream`, request, callbacks, signal);
+  }
+
+  private async streamFromEndpoint(
+    url: string,
+    payload: unknown,
+    callbacks: StreamCallbacks,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
       signal
     });
 
