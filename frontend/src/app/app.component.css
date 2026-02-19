@@ -152,7 +152,7 @@
   display: grid;
   grid-template-rows: auto 1fr auto;
   gap: 0.7rem;
-  min-height: calc(100vh - 140px);
+  align-content: start;
 }
 
 .quick-select {
@@ -215,8 +215,8 @@
   border-radius: 10px;
   padding: 0.65rem;
   overflow: auto;
-  min-height: 280px;
-  max-height: 58vh;
+  min-height: 0;
+  max-height: min(58vh, 720px);
   display: grid;
   gap: 0.55rem;
 }
