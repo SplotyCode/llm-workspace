@@ -261,6 +261,7 @@ export class AppComponent implements OnInit {
       id: `tmp_user_${Date.now()}`,
       role: 'user',
       content: userPrompt,
+      inclusion: 'always',
       createdAt: new Date().toISOString()
     });
 
@@ -344,6 +345,62 @@ export class AppComponent implements OnInit {
   updateOllamaModels(input: string): void {
     this.config.ollama.models = this.parseModels(input);
     this.cleanupSelectedTargets();
+  }
+
+  async onMessageInclusionChange(message: Message, value: string): Promise<void> {
+    const normalized = this.normalizeInclusion(value);
+    if (!normalized) {
+      return;
+    }
+    const allowed = this.normalizeInclusionForMessage(message, normalized);
+    message.inclusion = allowed;
+    if (allowed === 'model_only') {
+      message.scopeId = message.targetId ?? message.scopeId ?? '';
+    } else {
+      message.scopeId = '';
+    }
+
+    if (!this.selectedChatId || message.id.startsWith('tmp_')) {
+      return;
+    }
+
+    try {
+      await this.chatService.updateMessageInclusion(this.selectedChatId, message.id, {
+        inclusion: allowed,
+        scopeId: message.scopeId
+      });
+    } catch (err) {
+      this.error = (err as Error).message;
+    }
+  }
+
+  messageInclusionOptions(message: Message): Array<{ value: 'dont_include' | 'model_only' | 'always'; label: string }> {
+    if (message.role === 'user') {
+      return [
+        { value: 'always', label: 'always include' },
+        { value: 'dont_include', label: "don't include" }
+      ];
+    }
+    return [
+      { value: 'model_only', label: 'this model' },
+      { value: 'always', label: 'always include' },
+      { value: 'dont_include', label: "don't include" }
+    ];
+  }
+
+  messageInclusionValue(message: Message): 'dont_include' | 'model_only' | 'always' {
+    const raw = this.normalizeInclusion(message.inclusion ?? '');
+    return this.normalizeInclusionForMessage(message, raw || (message.role === 'assistant' ? 'model_only' : 'always'));
+  }
+
+  inclusionOptionTitle(value: 'dont_include' | 'model_only' | 'always'): string {
+    if (value === 'dont_include') {
+      return 'Exclude this message from future prompts.';
+    }
+    if (value === 'model_only') {
+      return 'Include this message only when generating with this specific model.';
+    }
+    return 'Include this message for all models in future prompts.';
   }
 
   private async reloadFolders(preferredFolderId?: string): Promise<void> {
@@ -436,6 +493,8 @@ export class AppComponent implements OnInit {
         provider: event.provider,
         model: event.model,
         targetId: event.targetId,
+        inclusion: 'model_only',
+        scopeId: event.targetId,
         status: 'streaming',
         createdAt: new Date().toISOString()
       };
@@ -477,6 +536,23 @@ export class AppComponent implements OnInit {
     const n = Number(v);
     if (!Number.isFinite(n) || n < 0 || n > 2) return null;
     return n;
+  }
+
+  private normalizeInclusion(value: string): 'dont_include' | 'model_only' | 'always' | '' {
+    if (value === 'dont_include' || value === 'model_only' || value === 'always') {
+      return value;
+    }
+    return '';
+  }
+
+  private normalizeInclusionForMessage(
+    message: Message,
+    value: 'dont_include' | 'model_only' | 'always'
+  ): 'dont_include' | 'model_only' | 'always' {
+    if (message.role === 'user' && value === 'model_only') {
+      return 'always';
+    }
+    return value;
   }
 
   private focusRenameInput(): void {

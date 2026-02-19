@@ -241,8 +241,34 @@
   display: flex;
   gap: 0.45rem;
   align-items: center;
+  flex-wrap: wrap;
   color: #33505b;
   font-size: 0.8rem;
+}
+
+.include-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  border: 1px solid #c9d8dd;
+  background: #f7fafb;
+  border-radius: 999px;
+  padding: 0.15rem;
+}
+
+.include-option {
+  border: 0;
+  background: transparent;
+  color: #47636d;
+  border-radius: 999px;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.72rem;
+  line-height: 1.1;
+}
+
+.include-option.active {
+  background: #e8f9f5;
+  color: #0d6658;
 }
 
 .composer textarea {

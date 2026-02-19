@@ -132,6 +132,22 @@ export class ChatService {
     return (await res.json()) as ChatSummary;
   }
 
+  async updateMessageInclusion(
+    chatId: string,
+    messageId: string,
+    patch: { inclusion: 'dont_include' | 'model_only' | 'always'; scopeId?: string }
+  ): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/api/chats/${chatId}/messages/${messageId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch)
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(body || `Failed to update message inclusion (${res.status})`);
+    }
+  }
+
   async streamChat(request: ChatRequest, callbacks: StreamCallbacks, signal?: AbortSignal): Promise<void> {
     const res = await fetch(`${this.baseUrl}/api/chat/stream`, {
       method: 'POST',

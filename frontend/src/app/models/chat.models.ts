@@ -67,6 +67,8 @@ export interface Message {
   provider?: string;
   model?: string;
   targetId?: string;
+  inclusion?: 'dont_include' | 'model_only' | 'always';
+  scopeId?: string;
   status?: 'streaming' | 'done' | 'error';
   error?: string;
   createdAt: string;

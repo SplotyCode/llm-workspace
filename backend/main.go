@@ -45,6 +45,11 @@ type updateChatRequest struct {
 	Title    string `json:"title"`
 }
 
+type updateMessageRequest struct {
+	Inclusion string `json:"inclusion"`
+	ScopeID   string `json:"scopeId,omitempty"`
+}
+
 type providerInfo struct {
 	ID     string   `json:"id"`
 	Name   string   `json:"name"`
@@ -160,11 +165,38 @@ func main() {
 	})
 
 	mux.HandleFunc("/api/chats/", func(w http.ResponseWriter, r *http.Request) {
-		id := strings.TrimPrefix(r.URL.Path, "/api/chats/")
-		if id == "" {
+		rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/chats/"), "/")
+		if rest == "" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
+
+		parts := strings.Split(rest, "/")
+		if len(parts) == 3 && parts[1] == "messages" {
+			if r.Method != http.MethodPatch {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			var req updateMessageRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+				return
+			}
+			updated, err := store.UpdateMessageInclusion(parts[0], parts[2], req.Inclusion, req.ScopeID)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, updated)
+			return
+		}
+
+		if len(parts) != 1 {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		id := parts[0]
+
 		switch r.Method {
 		case http.MethodGet:
 			chat, ok := store.GetChat(id)
@@ -273,8 +305,8 @@ func main() {
 			}
 		}
 
-		for _, target := range req.Targets {
-			adapter, exists := registry[target.Provider]
+			for _, target := range req.Targets {
+				adapter, exists := registry[target.Provider]
 			if !exists {
 				_ = emit(providers.StreamEvent{
 					TargetID: target.Provider + ":" + target.Model,
@@ -286,14 +318,15 @@ func main() {
 				continue
 			}
 
-			wg.Add(1)
-			go func(t providers.Target, a providers.Adapter) {
-				defer wg.Done()
-				targetID := t.Provider + ":" + t.Model
+				wg.Add(1)
+				go func(t providers.Target, a providers.Adapter) {
+					defer wg.Done()
+					targetID := t.Provider + ":" + t.Model
+					history := buildTargetHistory(chat.Messages, targetID)
 
-				_ = emit(providers.StreamEvent{TargetID: targetID, Provider: t.Provider, Model: t.Model, Event: "start"})
-				err := a.Stream(ctx, providers.StreamRequest{Prompt: req.Prompt, Target: t, Config: effectiveConfig}, emit)
-				if err != nil && !errors.Is(err, context.Canceled) {
+					_ = emit(providers.StreamEvent{TargetID: targetID, Provider: t.Provider, Model: t.Model, Event: "start"})
+					err := a.Stream(ctx, providers.StreamRequest{Prompt: req.Prompt, Target: t, Config: effectiveConfig, History: history}, emit)
+					if err != nil && !errors.Is(err, context.Canceled) {
 					_ = emit(providers.StreamEvent{
 						TargetID: targetID,
 						Provider: t.Provider,
@@ -313,15 +346,17 @@ func main() {
 
 		outputs := map[string]state.Message{}
 		enc := json.NewEncoder(w)
-		for ev := range events {
-			if ev.Event == "chunk" {
-				out := outputs[ev.TargetID]
-				out.TargetID = ev.TargetID
-				out.Provider = ev.Provider
-				out.Model = ev.Model
-				out.Content += ev.Content
-				outputs[ev.TargetID] = out
-			}
+			for ev := range events {
+				if ev.Event == "chunk" {
+					out := outputs[ev.TargetID]
+					out.TargetID = ev.TargetID
+					out.Provider = ev.Provider
+					out.Model = ev.Model
+					out.Inclusion = "model_only"
+					out.ScopeID = ev.TargetID
+					out.Content += ev.Content
+					outputs[ev.TargetID] = out
+				}
 
 			_, _ = fmt.Fprint(w, "event: message\n")
 			_, _ = fmt.Fprint(w, "data: ")
@@ -385,6 +420,50 @@ func mergeConfig(base, override providers.ProviderConfig) providers.ProviderConf
 		merged.Ollama.Models = override.Ollama.Models
 	}
 	return merged
+}
+
+func buildTargetHistory(messages []state.Message, targetID string) []providers.HistoryMessage {
+	history := make([]providers.HistoryMessage, 0, len(messages))
+	for _, msg := range messages {
+		if strings.TrimSpace(msg.Content) == "" || strings.TrimSpace(msg.Role) == "" {
+			continue
+		}
+		if !messageIncludedForTarget(msg, targetID) {
+			continue
+		}
+		history = append(history, providers.HistoryMessage{
+			Role:    msg.Role,
+			Content: msg.Content,
+		})
+	}
+	return history
+}
+
+func messageIncludedForTarget(msg state.Message, targetID string) bool {
+	switch strings.TrimSpace(strings.ToLower(msg.Inclusion)) {
+	case "dont_include":
+		return false
+	case "always":
+		return true
+	case "model_only":
+		scope := strings.TrimSpace(msg.ScopeID)
+		if scope == "" {
+			scope = strings.TrimSpace(msg.TargetID)
+		}
+		if scope == "" {
+			return true
+		}
+		return scope == targetID
+	default:
+		if msg.Role == "assistant" {
+			scope := strings.TrimSpace(msg.TargetID)
+			if scope == "" {
+				return false
+			}
+			return scope == targetID
+		}
+		return true
+	}
 }
 
 func withCORS(next http.Handler) http.Handler {

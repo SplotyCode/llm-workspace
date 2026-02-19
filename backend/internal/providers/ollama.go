@@ -38,6 +38,12 @@ func (a *OllamaAdapter) Stream(ctx context.Context, req StreamRequest, emit func
 	if req.Target.SystemPrompt != "" {
 		messages = append(messages, map[string]string{"role": "system", "content": req.Target.SystemPrompt})
 	}
+	for _, m := range req.History {
+		if strings.TrimSpace(m.Content) == "" || strings.TrimSpace(m.Role) == "" {
+			continue
+		}
+		messages = append(messages, map[string]string{"role": m.Role, "content": m.Content})
+	}
 	messages = append(messages, map[string]string{"role": "user", "content": req.Prompt})
 
 	body := map[string]any{

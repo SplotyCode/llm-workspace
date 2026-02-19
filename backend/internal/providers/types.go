@@ -29,6 +29,12 @@ type StreamRequest struct {
 	Prompt string
 	Target Target
 	Config ProviderConfig
+	History []HistoryMessage
+}
+
+type HistoryMessage struct {
+	Role    string
+	Content string
 }
 
 type StreamEvent struct {

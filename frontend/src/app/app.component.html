@@ -98,6 +98,18 @@
           <div class="msg-meta">
             <strong>{{ msg.role }}</strong>
             <span *ngIf="msg.provider && msg.model">{{ msg.provider }} · {{ msg.model }}</span>
+            <div class="include-control" role="group" aria-label="Message context policy">
+              <button
+                type="button"
+                class="include-option"
+                *ngFor="let option of messageInclusionOptions(msg)"
+                [class.active]="messageInclusionValue(msg) === option.value"
+                (click)="onMessageInclusionChange(msg, option.value)"
+                [attr.title]="inclusionOptionTitle(option.value)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
             <span class="status" *ngIf="msg.status" [class.streaming]="msg.status === 'streaming'" [class.done]="msg.status === 'done'" [class.error]="msg.status === 'error'">
               {{ msg.status }}
             </span>
