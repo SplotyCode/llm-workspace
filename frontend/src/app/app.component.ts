@@ -47,6 +47,10 @@ export class AppComponent implements OnInit {
   selectedTargets = new Set<string>();
   private liveAssistantIndexByTarget = new Map<string, number>();
   private abortController?: AbortController;
+  draggingChatId = '';
+  dropFolderId = '';
+  editingChatId = '';
+  editingChatTitle = '';
 
   constructor(private readonly chatService: ChatService) {}
 
@@ -155,6 +159,69 @@ export class AppComponent implements OnInit {
     this.selectedChatId = chatId;
     try {
       this.selectedChat = await this.chatService.getChat(chatId);
+    } catch (err) {
+      this.error = (err as Error).message;
+    }
+  }
+
+  startChatDrag(chatId: string): void {
+    this.draggingChatId = chatId;
+  }
+
+  endChatDrag(): void {
+    this.draggingChatId = '';
+    this.dropFolderId = '';
+  }
+
+  onFolderDragOver(folderId: string, event: DragEvent): void {
+    if (!this.draggingChatId) return;
+    event.preventDefault();
+    this.dropFolderId = folderId;
+  }
+
+  async onChatDropOnFolder(folderId: string, event: DragEvent): Promise<void> {
+    event.preventDefault();
+    if (!this.draggingChatId) return;
+
+    const chatId = this.draggingChatId;
+    this.endChatDrag();
+    const chat = this.chats.find((c) => c.id === chatId);
+    if (!chat) return;
+    if (chat.folderId === folderId && this.selectedFolderId === folderId) return;
+
+    try {
+      await this.chatService.updateChat(chatId, { folderId });
+      await this.reloadFolders(folderId);
+      await this.reloadChats(chatId);
+    } catch (err) {
+      this.error = (err as Error).message;
+    }
+  }
+
+  startRenameChat(chat: ChatSummary, event?: MouseEvent): void {
+    event?.stopPropagation();
+    this.editingChatId = chat.id;
+    this.editingChatTitle = chat.title;
+  }
+
+  cancelRenameChat(): void {
+    this.editingChatId = '';
+    this.editingChatTitle = '';
+  }
+
+  async saveRenameChat(chatId: string): Promise<void> {
+    const title = this.editingChatTitle.trim();
+    if (!title) {
+      this.cancelRenameChat();
+      return;
+    }
+    try {
+      await this.chatService.updateChat(chatId, { title });
+      const keepFolderId = this.selectedFolderId;
+      const keepChatId = this.selectedChatId === chatId ? chatId : this.selectedChatId;
+      await this.reloadFolders(keepFolderId);
+      await this.reloadChats(keepChatId);
+      this.cancelRenameChat();
     } catch (err) {
       this.error = (err as Error).message;
     }

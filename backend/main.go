@@ -40,6 +40,11 @@ type createChatRequest struct {
 	Title    string `json:"title"`
 }
 
+type updateChatRequest struct {
+	FolderID string `json:"folderId"`
+	Title    string `json:"title"`
+}
+
 type providerInfo struct {
 	ID     string   `json:"id"`
 	Name   string   `json:"name"`
@@ -160,16 +165,29 @@ func main() {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		if r.Method != http.MethodGet {
+		switch r.Method {
+		case http.MethodGet:
+			chat, ok := store.GetChat(id)
+			if !ok {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "chat not found"})
+				return
+			}
+			writeJSON(w, http.StatusOK, chat)
+		case http.MethodPatch:
+			var req updateChatRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+				return
+			}
+			chat, err := store.UpdateChat(id, req.Title, req.FolderID)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, chat)
+		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
 		}
-		chat, ok := store.GetChat(id)
-		if !ok {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "chat not found"})
-			return
-		}
-		writeJSON(w, http.StatusOK, chat)
 	})
 
 	mux.HandleFunc("/api/chat/stream", func(w http.ResponseWriter, r *http.Request) {

@@ -119,6 +119,19 @@ export class ChatService {
     return (await res.json()) as ChatDetail;
   }
 
+  async updateChat(chatId: string, patch: { title?: string; folderId?: string }): Promise<ChatSummary> {
+    const res = await fetch(`${this.baseUrl}/api/chats/${chatId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch)
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(body || `Failed to update chat (${res.status})`);
+    }
+    return (await res.json()) as ChatSummary;
+  }
+
   async streamChat(request: ChatRequest, callbacks: StreamCallbacks, signal?: AbortSignal): Promise<void> {
     const res = await fetch(`${this.baseUrl}/api/chat/stream`, {
       method: 'POST',

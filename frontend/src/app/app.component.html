@@ -21,7 +21,11 @@
             class="folder-item"
             *ngFor="let folder of folders"
             [class.active]="folder.id === selectedFolderId"
+            [class.drop-target]="dropFolderId === folder.id"
             (click)="selectFolder(folder.id)"
+            (dragover)="onFolderDragOver(folder.id, $event)"
+            (drop)="onChatDropOnFolder(folder.id, $event)"
+            (dragleave)="dropFolderId = ''"
           >
             <span>{{ folder.name }}</span>
             <span class="folder-actions">
@@ -38,15 +42,30 @@
           <button class="secondary" (click)="createChat()">New Chat</button>
         </div>
         <div class="chat-list">
-          <button
-            type="button"
+          <div
             class="chat-item"
             *ngFor="let chat of chats"
             [class.active]="chat.id === selectedChatId"
+            draggable="true"
             (click)="selectChat(chat.id)"
+            (dragstart)="startChatDrag(chat.id)"
+            (dragend)="endChatDrag()"
           >
-            {{ chat.title }}
-          </button>
+            <ng-container *ngIf="editingChatId !== chat.id; else editingTitle">
+              <span>{{ chat.title }}</span>
+              <button type="button" class="chat-rename-btn" (click)="startRenameChat(chat, $event)" aria-label="Rename chat">✎</button>
+            </ng-container>
+            <ng-template #editingTitle>
+              <input
+                type="text"
+                [(ngModel)]="editingChatTitle"
+                (click)="$event.stopPropagation()"
+                (keydown.enter)="saveRenameChat(chat.id)"
+                (keydown.escape)="cancelRenameChat()"
+                (blur)="saveRenameChat(chat.id)"
+              />
+            </ng-template>
+          </div>
         </div>
       </section>
     </aside>

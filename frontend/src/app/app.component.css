@@ -105,6 +105,21 @@
   gap: 0.45rem;
 }
 
+.chat-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.chat-item[draggable='true'] {
+  cursor: grab;
+}
+
+.chat-item[draggable='true']:active {
+  cursor: grabbing;
+}
+
 .folder-actions {
   display: inline-flex;
   align-items: center;
@@ -126,6 +141,11 @@
 .chat-item.active {
   border-color: #82cbc0;
   background: #ecfffb;
+}
+
+.folder-item.drop-target {
+  border-color: #3ea68e;
+  background: #e3fff7;
 }
 
 .main {
@@ -314,6 +334,27 @@ button[disabled] {
   transition: opacity 120ms ease;
 }
 
+.chat-rename-btn {
+  border: 1px solid #ccdadf;
+  background: #fff;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.chat-item:hover .chat-rename-btn,
+.chat-item.active .chat-rename-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 pre {
   margin: 0.45rem 0 0;
   white-space: pre-wrap;
@@ -384,6 +425,11 @@ label {
   }
 
   .folder-settings-btn {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .chat-rename-btn {
     opacity: 1;
     pointer-events: auto;
   }
