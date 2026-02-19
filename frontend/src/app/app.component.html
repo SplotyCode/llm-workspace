@@ -57,6 +57,7 @@
             </ng-container>
             <ng-template #editingTitle>
               <input
+                #chatRenameInput
                 type="text"
                 [(ngModel)]="editingChatTitle"
                 (click)="$event.stopPropagation()"

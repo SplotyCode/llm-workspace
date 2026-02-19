@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnInit } from '@angular/core';
+import { Component, ElementRef, OnInit, QueryList, ViewChildren } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ChatDetail, ChatRequest, ChatSummary, Folder, Message, ProviderRuntimeConfig, StreamEvent } from './models/chat.models';
 import { ChatService } from './services/chat.service';
@@ -12,6 +12,7 @@ import { ChatService } from './services/chat.service';
   styleUrl: './app.component.css'
 })
 export class AppComponent implements OnInit {
+  @ViewChildren('chatRenameInput') private chatRenameInputs!: QueryList<ElementRef<HTMLInputElement>>;
   prompt = '';
   isStreaming = false;
   error = '';
@@ -202,6 +203,7 @@ export class AppComponent implements OnInit {
     event?.stopPropagation();
     this.editingChatId = chat.id;
     this.editingChatTitle = chat.title;
+    setTimeout(() => this.focusRenameInput(), 0);
   }
 
   cancelRenameChat(): void {
@@ -475,5 +477,12 @@ export class AppComponent implements OnInit {
     const n = Number(v);
     if (!Number.isFinite(n) || n < 0 || n > 2) return null;
     return n;
+  }
+
+  private focusRenameInput(): void {
+    const input = this.chatRenameInputs?.first?.nativeElement;
+    if (!input) return;
+    input.focus();
+    input.select();
   }
 }
