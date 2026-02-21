@@ -485,6 +485,42 @@ func (s *Store) ReplaceAssistantMessage(chatID, messageID string, replacement Me
 	return errors.New("chat not found")
 }
 
+func (s *Store) EditUserMessageInPlace(chatID, messageID, content string) (Chat, error) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return Chat{}, errors.New("content is required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.data.Chats {
+		if s.data.Chats[i].ID != chatID {
+			continue
+		}
+		msgIdx := indexOfMessage(s.data.Chats[i].Messages, messageID)
+		if msgIdx < 0 {
+			return Chat{}, errors.New("message not found")
+		}
+		if s.data.Chats[i].Messages[msgIdx].Role != "user" {
+			return Chat{}, errors.New("only user messages can be edited")
+		}
+
+		s.data.Chats[i].Messages[msgIdx].Content = content
+		s.data.Chats[i].Messages[msgIdx].CreatedAt = time.Now().UTC()
+		s.data.Chats[i].Messages = cloneMessages(s.data.Chats[i].Messages[:msgIdx+1])
+		s.data.Chats[i].UpdatedAt = time.Now().UTC()
+		if err := s.touchFolderLocked(s.data.Chats[i].FolderID); err != nil {
+			return Chat{}, err
+		}
+		if err := s.persistLocked(); err != nil {
+			return Chat{}, err
+		}
+		return s.data.Chats[i], nil
+	}
+	return Chat{}, errors.New("chat not found")
+}
+
 func (s *Store) AppendUserPrompt(chatID, prompt string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

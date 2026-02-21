@@ -295,6 +295,28 @@
   background: #edf6f8;
 }
 
+.edit-mode {
+  margin-top: 0.75rem;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.mode-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid #d4e1e5;
+  border-radius: 10px;
+  background: #f9fcfd;
+  color: #2f4f58;
+}
+
+.mode-option input {
+  width: auto;
+  margin-top: 0.1rem;
+}
+
 .include-control {
   display: inline-flex;
   align-items: center;

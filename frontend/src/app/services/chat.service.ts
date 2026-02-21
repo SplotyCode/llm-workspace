@@ -176,6 +176,18 @@ export class ChatService {
     );
   }
 
+  async editUserMessage(chatId: string, messageId: string, content: string): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/api/chats/${chatId}/messages/${messageId}/edit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content })
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(body || `Failed to edit message (${res.status})`);
+    }
+  }
+
   async streamChat(request: ChatRequest, callbacks: StreamCallbacks, signal?: AbortSignal): Promise<void> {
     await this.streamFromEndpoint(`${this.baseUrl}/api/chat/stream`, request, callbacks, signal);
   }

@@ -61,6 +61,10 @@ type regenerateRequest struct {
 	Config    providers.ProviderConfig `json:"config"`
 }
 
+type editMessageRequest struct {
+	Content string `json:"content"`
+}
+
 type providerInfo struct {
 	ID     string   `json:"id"`
 	Name   string   `json:"name"`
@@ -199,6 +203,25 @@ func main() {
 				return
 			}
 			writeJSON(w, http.StatusOK, updated)
+			return
+		}
+
+		if len(parts) == 4 && parts[1] == "messages" && parts[3] == "edit" {
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			var req editMessageRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+				return
+			}
+			chat, err := store.EditUserMessageInPlace(parts[0], parts[2], req.Content)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, chat)
 			return
 		}
 

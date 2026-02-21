@@ -125,6 +125,7 @@
               <div class="msg-menu" *ngIf="openMessageMenuId === msg.id">
                 <button type="button" (click)="regenerateFromMessage(msg)">Regenerate</button>
                 <button type="button" (click)="forkFromMessage(msg)">Fork chat from here</button>
+                <button type="button" *ngIf="msg.role === 'user'" (click)="openEditUserMessage(msg)">Edit message</button>
               </div>
             </div>
           </div>
@@ -198,6 +199,36 @@
   <div class="actions">
     <button class="primary" (click)="saveSettings()">Save</button>
     <button class="secondary" (click)="closeSettings()">Cancel</button>
+  </div>
+</section>
+
+<div class="modal-backdrop" *ngIf="showEditMessageModal" (click)="closeEditUserMessageModal()"></div>
+<section class="modal" *ngIf="showEditMessageModal" role="dialog" aria-modal="true">
+  <div class="row-head">
+    <h2>Edit User Message</h2>
+    <button class="secondary" (click)="closeEditUserMessageModal()">Close</button>
+  </div>
+
+  <article class="config-block">
+    <label>
+      Message
+      <textarea rows="6" [(ngModel)]="editingUserMessageContent"></textarea>
+    </label>
+    <div class="edit-mode">
+      <label class="mode-option">
+        <input type="radio" name="editMode" value="inplace" [(ngModel)]="editingUserMessageMode" />
+        <span>Replace in this chat (delete all following messages)</span>
+      </label>
+      <label class="mode-option">
+        <input type="radio" name="editMode" value="fork" [(ngModel)]="editingUserMessageMode" />
+        <span>Fork chat here and apply edit in the fork</span>
+      </label>
+    </div>
+  </article>
+
+  <div class="actions">
+    <button class="primary" (click)="saveEditUserMessage()">Apply</button>
+    <button class="secondary" (click)="closeEditUserMessageModal()">Cancel</button>
   </div>
 </section>
 

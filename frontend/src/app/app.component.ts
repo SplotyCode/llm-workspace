@@ -50,6 +50,10 @@ export class AppComponent implements OnInit {
   private abortController?: AbortController;
   openMessageMenuId = '';
   regeneratingMessageId = '';
+  showEditMessageModal = false;
+  editingUserMessageId = '';
+  editingUserMessageContent = '';
+  editingUserMessageMode: 'inplace' | 'fork' = 'inplace';
   draggingChatId = '';
   dropFolderId = '';
   editingChatId = '';
@@ -414,6 +418,52 @@ export class AppComponent implements OnInit {
       const fork = await this.chatService.forkChat(this.selectedChatId, message.id);
       await this.reloadFolders(fork.folderId);
       await this.reloadChats(fork.id);
+    } catch (err) {
+      this.error = (err as Error).message;
+    }
+  }
+
+  openEditUserMessage(message: Message): void {
+    if (message.role !== 'user') {
+      return;
+    }
+    this.closeMessageMenu();
+    this.editingUserMessageId = message.id;
+    this.editingUserMessageContent = message.content;
+    this.editingUserMessageMode = 'inplace';
+    this.showEditMessageModal = true;
+  }
+
+  closeEditUserMessageModal(): void {
+    this.showEditMessageModal = false;
+    this.editingUserMessageId = '';
+    this.editingUserMessageContent = '';
+    this.editingUserMessageMode = 'inplace';
+  }
+
+  async saveEditUserMessage(): Promise<void> {
+    if (!this.selectedChatId || !this.editingUserMessageId) {
+      return;
+    }
+    const content = this.editingUserMessageContent.trim();
+    if (!content) {
+      this.error = 'Edited message cannot be empty.';
+      return;
+    }
+
+    try {
+      if (this.editingUserMessageMode === 'inplace') {
+        await this.chatService.editUserMessage(this.selectedChatId, this.editingUserMessageId, content);
+        await this.reloadChats(this.selectedChatId);
+        this.closeEditUserMessageModal();
+        return;
+      }
+
+      const fork = await this.chatService.forkChat(this.selectedChatId, this.editingUserMessageId);
+      await this.chatService.editUserMessage(fork.id, this.editingUserMessageId, content);
+      await this.reloadFolders(fork.folderId);
+      await this.reloadChats(fork.id);
+      this.closeEditUserMessageModal();
     } catch (err) {
       this.error = (err as Error).message;
     }
