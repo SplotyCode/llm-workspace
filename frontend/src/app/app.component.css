@@ -427,6 +427,63 @@ app-folder-settings-modal {
   min-height: 100px;
 }
 
+.file-input-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+}
+
+.file-input-btn {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #c8d9de;
+  background: #f5fafb;
+  color: #24444f;
+  border-radius: 999px;
+  padding: 0.25rem 0.62rem;
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.file-input-btn input {
+  display: none;
+}
+
+.attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.5rem;
+}
+
+.msg-attachment-list {
+  margin-top: 0.42rem;
+  margin-bottom: 0;
+}
+
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  border: 1px solid #cad9df;
+  background: #f6fbfc;
+  color: #2d4d57;
+  border-radius: 999px;
+  padding: 0.16rem 0.46rem;
+  font-size: 0.72rem;
+}
+
+.attachment-chip button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 999px;
+  line-height: 1;
+}
+
 .status {
   font-size: 0.68rem;
   text-transform: uppercase;

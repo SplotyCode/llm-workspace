@@ -17,10 +17,16 @@ export interface ChatTarget {
   temperature?: number;
 }
 
+export interface TextAttachment {
+  name: string;
+  content: string;
+}
+
 export interface ChatRequest {
   chatId: string;
   prompt: string;
   targets: ChatTarget[];
+  attachments?: TextAttachment[];
   config: {
     openrouter?: {
       apiKey?: string;
@@ -64,6 +70,7 @@ export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  attachments?: TextAttachment[];
   provider?: string;
   model?: string;
   targetId?: string;
@@ -79,6 +86,7 @@ export interface Message {
 
 export interface MessageVersion {
   content: string;
+  attachments?: TextAttachment[];
   provider?: string;
   model?: string;
   targetId?: string;

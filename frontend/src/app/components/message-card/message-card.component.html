@@ -50,7 +50,14 @@
       </div>
     </div>
   </div>
-  <div class="msg-content" [class.collapsed]="collapsed && canCollapse">{{ message.content || 'Waiting for first token...' }}</div>
+  <div class="msg-content" [class.collapsed]="collapsed && canCollapse">
+    {{ message.content || (message.role === 'assistant' ? 'Waiting for first token...' : '') }}
+  </div>
+  <div class="attachment-list msg-attachment-list" *ngIf="message.attachments?.length">
+    <span class="attachment-chip" *ngFor="let file of message.attachments">
+      {{ file.name }}
+    </span>
+  </div>
   <button type="button" class="msg-collapse-btn" *ngIf="canCollapse" (click)="toggleCollapse()">
     {{ collapsed ? 'Show more' : 'Show less' }}
   </button>

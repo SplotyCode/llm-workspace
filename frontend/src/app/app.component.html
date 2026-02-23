@@ -154,6 +154,7 @@
         [prompt]="prompt"
         [isStreaming]="isStreaming"
         [error]="error"
+        [attachments]="pendingTextFiles"
         [selectedTargetsSize]="selectedTargets.size"
         [isContextLoading]="isContextLoading"
         [minContextItem]="minContextItem"
@@ -161,6 +162,8 @@
         [contextLoadError]="contextLoadError"
         (promptChange)="prompt = $event"
         (promptChanged)="onPromptChanged()"
+        (filesSelected)="onFilesSelected($event)"
+        (removeAttachment)="removeAttachment($event)"
         (submit)="submit()"
         (cancel)="cancel()"
       ></app-chat-composer>
@@ -182,10 +185,13 @@
 <app-edit-user-message-modal
   [show]="showEditMessageModal"
   [content]="editingUserMessageContent"
+  [attachments]="editingUserAttachments"
   [mode]="editingUserMessageMode"
   (close)="closeEditUserMessageModal()"
   (apply)="saveEditUserMessage()"
   (contentChange)="editingUserMessageContent = $event"
+  (filesSelected)="onEditModalFilesSelected($event)"
+  (removeAttachment)="removeEditAttachment($event)"
   (modeChange)="editingUserMessageMode = $event"
 ></app-edit-user-message-modal>
 

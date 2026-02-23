@@ -8,6 +8,16 @@
   <div class="actions">
     <button class="primary" (click)="submit.emit()" [disabled]="isStreaming">{{ isStreaming ? 'Streaming...' : 'Send' }}</button>
     <button class="secondary" (click)="cancel.emit()" [disabled]="!isStreaming">Stop</button>
+    <label class="file-input-btn">
+      Add text files
+      <input
+        type="file"
+        accept=".txt,.md,.csv,.json,text/plain,text/markdown,text/csv,application/json"
+        multiple
+        (change)="onFileChange($event)"
+      />
+    </label>
+    <span class="muted" *ngIf="attachments.length > 0">{{ attachments.length }} file(s)</span>
     <app-context-indicator
       *ngIf="selectedTargetsSize > 0"
       [isLoading]="isContextLoading"
@@ -15,6 +25,12 @@
       [items]="contextItems"
       [error]="contextLoadError"
     ></app-context-indicator>
+  </div>
+  <div class="attachment-list" *ngIf="attachments.length > 0">
+    <span class="attachment-chip" *ngFor="let file of attachments; let i = index">
+      {{ file.name }}
+      <button type="button" (click)="removeAttachment.emit(i)" aria-label="Remove file">×</button>
+    </span>
   </div>
   <p class="error" *ngIf="error">{{ error }}</p>
 </section>

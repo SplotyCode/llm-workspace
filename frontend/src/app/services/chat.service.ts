@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import { ChatDetail, ChatRequest, ChatSummary, ContextLimitItem, Folder, ProviderRuntimeConfig, StreamEvent } from '../models/chat.models';
+import { ChatDetail, ChatRequest, ChatSummary, ContextLimitItem, Folder, ProviderRuntimeConfig, StreamEvent, TextAttachment } from '../models/chat.models';
 
 interface StreamCallbacks {
   onEvent: (event: StreamEvent) => void;
@@ -176,11 +176,11 @@ export class ChatService {
     );
   }
 
-  async editUserMessage(chatId: string, messageId: string, content: string): Promise<void> {
+  async editUserMessage(chatId: string, messageId: string, content: string, attachments: TextAttachment[]): Promise<void> {
     const res = await fetch(`${this.baseUrl}/api/chats/${chatId}/messages/${messageId}/edit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content })
+      body: JSON.stringify({ content, attachments })
     });
     if (!res.ok) {
       const body = await res.text();
@@ -228,12 +228,13 @@ export class ChatService {
     targets: Array<{ provider: string; model: string }>,
     config: ChatRequest['config'],
     chatId?: string,
-    prompt?: string
+    prompt?: string,
+    attachments?: TextAttachment[]
   ): Promise<ContextLimitItem[]> {
     const res = await fetch(`${this.baseUrl}/api/context-limits`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ targets, config, chatId, prompt })
+      body: JSON.stringify({ targets, config, chatId, prompt, attachments })
     });
     if (!res.ok) {
       const body = await res.text();

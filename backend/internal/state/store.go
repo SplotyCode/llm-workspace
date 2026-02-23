@@ -27,6 +27,7 @@ type Message struct {
 	ID           string           `json:"id"`
 	Role         string           `json:"role"`
 	Content      string           `json:"content"`
+	Attachments  []TextAttachment `json:"attachments,omitempty"`
 	Provider     string           `json:"provider,omitempty"`
 	Model        string           `json:"model,omitempty"`
 	TargetID     string           `json:"targetId,omitempty"`
@@ -39,11 +40,17 @@ type Message struct {
 }
 
 type MessageVersion struct {
-	Content   string    `json:"content"`
-	Provider  string    `json:"provider,omitempty"`
-	Model     string    `json:"model,omitempty"`
-	TargetID  string    `json:"targetId,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
+	Content     string           `json:"content"`
+	Attachments []TextAttachment `json:"attachments,omitempty"`
+	Provider    string           `json:"provider,omitempty"`
+	Model       string           `json:"model,omitempty"`
+	TargetID    string           `json:"targetId,omitempty"`
+	CreatedAt   time.Time        `json:"createdAt"`
+}
+
+type TextAttachment struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
 }
 
 type Chat struct {
@@ -400,7 +407,7 @@ func (s *Store) PrepareRegenerate(chatID, messageID string) (chat Chat, prompt s
 		return Chat{}, "", nil, errors.New("no user prompt found before message")
 	}
 
-	prompt = s.data.Chats[chatIdx].Messages[userIdx].Content
+	prompt = renderPrompt(s.data.Chats[chatIdx].Messages[userIdx].Content, s.data.Chats[chatIdx].Messages[userIdx].Attachments)
 	history = cloneMessages(s.data.Chats[chatIdx].Messages[:userIdx])
 	s.data.Chats[chatIdx].Messages = cloneMessages(s.data.Chats[chatIdx].Messages[:userIdx+1])
 	s.data.Chats[chatIdx].UpdatedAt = time.Now().UTC()
@@ -436,7 +443,7 @@ func (s *Store) PrepareUserRegenerate(chatID, messageID string) (chat Chat, prom
 		return Chat{}, "", nil, nil, errors.New("message is not user")
 	}
 
-	prompt = s.data.Chats[chatIdx].Messages[msgIdx].Content
+	prompt = renderPrompt(s.data.Chats[chatIdx].Messages[msgIdx].Content, s.data.Chats[chatIdx].Messages[msgIdx].Attachments)
 	history = cloneMessages(s.data.Chats[chatIdx].Messages[:msgIdx])
 	replaceByTarget = map[string]string{}
 
@@ -524,7 +531,7 @@ func (s *Store) BuildSummaryPrompt(chatID, userMessageID string) (string, error)
 	b.WriteString("Create a concise, high-quality synthesis of multiple model responses.\n")
 	b.WriteString("Return: 1) key consensus, 2) key differences, 3) recommended final answer.\n\n")
 	b.WriteString("User question:\n")
-	b.WriteString(userMsg.Content)
+	b.WriteString(renderPrompt(userMsg.Content, userMsg.Attachments))
 	b.WriteString("\n\nResponses:\n")
 	for i, r := range responses {
 		b.WriteString(fmt.Sprintf("[%d] %s\n%s\n\n", i+1, r.header, r.content))
@@ -571,7 +578,7 @@ func (s *Store) PrepareAssistantRegenerate(chatID, messageID string) (chat Chat,
 		return Chat{}, "", nil, Message{}, errors.New("no user prompt found before message")
 	}
 
-	prompt = s.data.Chats[chatIdx].Messages[userIdx].Content
+	prompt = renderPrompt(s.data.Chats[chatIdx].Messages[userIdx].Content, s.data.Chats[chatIdx].Messages[userIdx].Attachments)
 	history = cloneMessages(s.data.Chats[chatIdx].Messages[:userIdx])
 	chat = s.data.Chats[chatIdx]
 	return chat, prompt, history, target, nil
@@ -633,9 +640,9 @@ func (s *Store) ReplaceAssistantMessage(chatID, messageID string, replacement Me
 	return errors.New("chat not found")
 }
 
-func (s *Store) EditUserMessageInPlace(chatID, messageID, content string) (Chat, error) {
+func (s *Store) EditUserMessageInPlace(chatID, messageID, content string, attachments []TextAttachment) (Chat, error) {
 	content = strings.TrimSpace(content)
-	if content == "" {
+	if content == "" && len(attachments) == 0 {
 		return Chat{}, errors.New("content is required")
 	}
 
@@ -656,11 +663,13 @@ func (s *Store) EditUserMessageInPlace(chatID, messageID, content string) (Chat,
 
 		ensureMessageHistory(&s.data.Chats[i].Messages[msgIdx])
 		s.data.Chats[i].Messages[msgIdx].History = append(s.data.Chats[i].Messages[msgIdx].History, MessageVersion{
-			Content:   content,
-			CreatedAt: time.Now().UTC(),
+			Content:     content,
+			Attachments: cloneAttachments(attachments),
+			CreatedAt:   time.Now().UTC(),
 		})
 		s.data.Chats[i].Messages[msgIdx].HistoryIndex = len(s.data.Chats[i].Messages[msgIdx].History) - 1
 		s.data.Chats[i].Messages[msgIdx].Content = content
+		s.data.Chats[i].Messages[msgIdx].Attachments = cloneAttachments(attachments)
 		s.data.Chats[i].Messages[msgIdx].Provider = ""
 		s.data.Chats[i].Messages[msgIdx].Model = ""
 		s.data.Chats[i].Messages[msgIdx].TargetID = ""
@@ -678,7 +687,7 @@ func (s *Store) EditUserMessageInPlace(chatID, messageID, content string) (Chat,
 	return Chat{}, errors.New("chat not found")
 }
 
-func (s *Store) AppendUserPrompt(chatID, prompt string) error {
+func (s *Store) AppendUserPrompt(chatID, prompt string, attachments []TextAttachment) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -688,19 +697,21 @@ func (s *Store) AppendUserPrompt(chatID, prompt string) error {
 		}
 		now := time.Now().UTC()
 		s.data.Chats[i].Messages = append(s.data.Chats[i].Messages, Message{
-			ID:        newID("msg"),
-			Role:      "user",
-			Content:   prompt,
-			Inclusion: "always",
+			ID:          newID("msg"),
+			Role:        "user",
+			Content:     prompt,
+			Attachments: cloneAttachments(attachments),
+			Inclusion:   "always",
 			History: []MessageVersion{{
-				Content:   prompt,
-				CreatedAt: now,
+				Content:     prompt,
+				Attachments: cloneAttachments(attachments),
+				CreatedAt:   now,
 			}},
 			HistoryIndex: 0,
 			CreatedAt:    now,
 		})
 		if len(s.data.Chats[i].Messages) == 1 && strings.TrimSpace(s.data.Chats[i].Title) == "New Chat" {
-			s.data.Chats[i].Title = trimTitle(prompt)
+			s.data.Chats[i].Title = trimTitle(renderPrompt(prompt, attachments))
 		}
 		s.data.Chats[i].UpdatedAt = now
 		if err := s.touchFolderLocked(s.data.Chats[i].FolderID); err != nil {
@@ -822,6 +833,7 @@ func (s *Store) SetMessageHistoryIndex(chatID, messageID string, index int) (Mes
 			msg.HistoryIndex = index
 			version := msg.History[index]
 			msg.Content = version.Content
+			msg.Attachments = cloneAttachments(version.Attachments)
 			msg.Provider = version.Provider
 			msg.Model = version.Model
 			msg.TargetID = version.TargetID
@@ -871,11 +883,12 @@ func ensureMessageHistory(msg *Message) {
 	}
 	if len(msg.History) == 0 {
 		msg.History = []MessageVersion{{
-			Content:   msg.Content,
-			Provider:  msg.Provider,
-			Model:     msg.Model,
-			TargetID:  msg.TargetID,
-			CreatedAt: msg.CreatedAt,
+			Content:     msg.Content,
+			Attachments: cloneAttachments(msg.Attachments),
+			Provider:    msg.Provider,
+			Model:       msg.Model,
+			TargetID:    msg.TargetID,
+			CreatedAt:   msg.CreatedAt,
 		}}
 		msg.HistoryIndex = 0
 	}
@@ -884,6 +897,7 @@ func ensureMessageHistory(msg *Message) {
 	}
 	current := msg.History[msg.HistoryIndex]
 	msg.Content = current.Content
+	msg.Attachments = cloneAttachments(current.Attachments)
 	msg.Provider = current.Provider
 	msg.Model = current.Model
 	msg.TargetID = current.TargetID
@@ -918,6 +932,42 @@ func trimTitle(prompt string) string {
 		return string(runes[:40]) + "..."
 	}
 	return prompt
+}
+
+func renderPrompt(prompt string, attachments []TextAttachment) string {
+	base := strings.TrimSpace(prompt)
+	if len(attachments) == 0 {
+		return base
+	}
+	parts := make([]string, 0, len(attachments))
+	for _, att := range attachments {
+		content := strings.TrimSpace(att.Content)
+		if content == "" {
+			continue
+		}
+		name := strings.TrimSpace(att.Name)
+		if name == "" {
+			name = "attachment.txt"
+		}
+		parts = append(parts, "File: "+name+"\n"+content)
+	}
+	if len(parts) == 0 {
+		return base
+	}
+	joined := strings.Join(parts, "\n\n---\n\n")
+	if base == "" {
+		return "Attached text files:\n\n" + joined
+	}
+	return base + "\n\nAttached text files:\n\n" + joined
+}
+
+func cloneAttachments(src []TextAttachment) []TextAttachment {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]TextAttachment, 0, len(src))
+	out = append(out, src...)
+	return out
 }
 
 func newID(prefix string) string {

@@ -1,5 +1,5 @@
 import { Directive } from '@angular/core';
-import { ChatDetail, ChatRequest, ChatSummary, ContextLimitItem, Folder, Message, ProviderRuntimeConfig, StreamEvent } from './models/chat.models';
+import { ChatDetail, ChatRequest, ChatSummary, ContextLimitItem, Folder, Message, ProviderRuntimeConfig, StreamEvent, TextAttachment } from './models/chat.models';
 import { ChatService } from './services/chat.service';
 
 interface MessageGroup {
@@ -15,6 +15,7 @@ export class AppWorkspace {
 
   showSettings = false;
   showFolderSettings = false;
+  pendingTextFiles: TextAttachment[] = [];
 
   folders: Folder[] = [];
   chats: ChatSummary[] = [];
@@ -51,6 +52,7 @@ export class AppWorkspace {
   showEditMessageModal = false;
   editingUserMessageId = '';
   editingUserMessageContent = '';
+  editingUserAttachments: TextAttachment[] = [];
   editingUserMessageMode: 'inplace' | 'fork' = 'inplace';
   draggingChatId = '';
   dropFolderId = '';
@@ -164,6 +166,30 @@ export class AppWorkspace {
     this.contextRefreshTimer = setTimeout(() => {
       void this.refreshContextLimits();
     }, 220);
+  }
+
+  async onFilesSelected(fileList: FileList | null): Promise<void> {
+    if (!fileList || fileList.length === 0) return;
+    const files = Array.from(fileList);
+    const loaded: TextAttachment[] = [];
+    for (const file of files) {
+      if (!this.isTextFile(file)) {
+        this.error = `Unsupported file type: ${file.name}`;
+        continue;
+      }
+      const content = await file.text();
+      loaded.push({ name: file.name, content });
+    }
+    if (loaded.length > 0) {
+      this.pendingTextFiles = [...this.pendingTextFiles, ...loaded];
+      void this.refreshContextLimits();
+    }
+  }
+
+  removeAttachment(index: number): void {
+    if (index < 0 || index >= this.pendingTextFiles.length) return;
+    this.pendingTextFiles = this.pendingTextFiles.filter((_, i) => i !== index);
+    void this.refreshContextLimits();
   }
 
   isTargetSelected(targetId: string): boolean {
@@ -315,8 +341,8 @@ export class AppWorkspace {
     this.error = '';
     const targets = this.buildTargets();
 
-    if (!this.prompt.trim()) {
-      this.error = 'Enter a prompt.';
+    if (!this.prompt.trim() && this.pendingTextFiles.length === 0) {
+      this.error = 'Enter a prompt or add text files.';
       return;
     }
     if (targets.length === 0) {
@@ -334,7 +360,9 @@ export class AppWorkspace {
     }
 
     const userPrompt = this.prompt.trim();
+    const outboundAttachments = [...this.pendingTextFiles];
     this.prompt = '';
+    this.pendingTextFiles = [];
     this.isStreaming = true;
     this.isSummaryStream = false;
     this.liveAssistantIndexByTarget.clear();
@@ -345,6 +373,7 @@ export class AppWorkspace {
       id: `tmp_user_${Date.now()}`,
       role: 'user',
       content: userPrompt,
+      attachments: this.cloneAttachments(outboundAttachments),
       inclusion: 'always',
       createdAt: new Date().toISOString()
     });
@@ -353,6 +382,7 @@ export class AppWorkspace {
       chatId: this.selectedChatId,
       prompt: userPrompt,
       targets,
+      attachments: outboundAttachments,
       config: {
         openrouter: {
           apiKey: this.config.openrouter.apiKey.trim(),
@@ -566,6 +596,7 @@ export class AppWorkspace {
     this.closeMessageMenu();
     this.editingUserMessageId = message.id;
     this.editingUserMessageContent = message.content;
+    this.editingUserAttachments = this.cloneAttachments(message.attachments ?? []);
     this.editingUserMessageMode = 'inplace';
     this.showEditMessageModal = true;
   }
@@ -574,7 +605,30 @@ export class AppWorkspace {
     this.showEditMessageModal = false;
     this.editingUserMessageId = '';
     this.editingUserMessageContent = '';
+    this.editingUserAttachments = [];
     this.editingUserMessageMode = 'inplace';
+  }
+
+  async onEditModalFilesSelected(fileList: FileList | null): Promise<void> {
+    if (!fileList || fileList.length === 0) return;
+    const files = Array.from(fileList);
+    const loaded: TextAttachment[] = [];
+    for (const file of files) {
+      if (!this.isTextFile(file)) {
+        this.error = `Unsupported file type: ${file.name}`;
+        continue;
+      }
+      const content = await file.text();
+      loaded.push({ name: file.name, content });
+    }
+    if (loaded.length > 0) {
+      this.editingUserAttachments = [...this.editingUserAttachments, ...loaded];
+    }
+  }
+
+  removeEditAttachment(index: number): void {
+    if (index < 0 || index >= this.editingUserAttachments.length) return;
+    this.editingUserAttachments = this.editingUserAttachments.filter((_, i) => i !== index);
   }
 
   async saveEditUserMessage(): Promise<void> {
@@ -583,14 +637,15 @@ export class AppWorkspace {
     }
     const editedMessageId = this.editingUserMessageId;
     const content = this.editingUserMessageContent.trim();
-    if (!content) {
+    if (!content && this.editingUserAttachments.length === 0) {
       this.error = 'Edited message cannot be empty.';
       return;
     }
+    const attachments = this.cloneAttachments(this.editingUserAttachments);
 
     try {
       if (this.editingUserMessageMode === 'inplace') {
-        await this.chatService.editUserMessage(this.selectedChatId, editedMessageId, content);
+        await this.chatService.editUserMessage(this.selectedChatId, editedMessageId, content, attachments);
         await this.reloadChats(this.selectedChatId);
         this.closeEditUserMessageModal();
         const edited = this.selectedChat?.messages.find((m) => m.id === editedMessageId);
@@ -601,7 +656,7 @@ export class AppWorkspace {
       }
 
       const fork = await this.chatService.forkChat(this.selectedChatId, editedMessageId);
-      await this.chatService.editUserMessage(fork.id, editedMessageId, content);
+      await this.chatService.editUserMessage(fork.id, editedMessageId, content, attachments);
       await this.reloadFolders(fork.folderId);
       await this.reloadChats(fork.id);
       this.closeEditUserMessageModal();
@@ -723,6 +778,7 @@ export class AppWorkspace {
     const selected = message.history?.[next];
     if (selected) {
       message.content = selected.content;
+      message.attachments = this.cloneAttachments(selected.attachments ?? []);
       message.provider = selected.provider;
       message.model = selected.model;
       message.targetId = selected.targetId;
@@ -966,7 +1022,8 @@ export class AppWorkspace {
         targets,
         this.runtimeConfig(),
         this.selectedChatId || undefined,
-        this.prompt
+        this.prompt.trim(),
+        this.cloneAttachments(this.pendingTextFiles)
       );
       const next = new Map<string, ContextLimitItem>();
       for (const item of limits) {
@@ -1076,6 +1133,21 @@ export class AppWorkspace {
       if (msg.status !== 'error') msg.status = 'done';
       this.selectedChat.messages = [...this.selectedChat.messages];
     }
+  }
+
+  private cloneAttachments(attachments: TextAttachment[]): TextAttachment[] {
+    if (!attachments.length) {
+      return [];
+    }
+    return attachments.map((a) => ({ name: a.name, content: a.content }));
+  }
+
+  private isTextFile(file: File): boolean {
+    const name = file.name.toLowerCase();
+    if (name.endsWith('.txt') || name.endsWith('.md') || name.endsWith('.csv') || name.endsWith('.json')) {
+      return true;
+    }
+    return file.type.startsWith('text/') || file.type === 'application/json';
   }
 
   private parseTemperature(input: string): number | undefined | null {

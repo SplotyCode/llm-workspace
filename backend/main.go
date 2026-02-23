@@ -17,10 +17,27 @@ import (
 )
 
 type chatRequest struct {
-	ChatID  string                   `json:"chatId"`
-	Prompt  string                   `json:"prompt"`
-	Targets []providers.Target       `json:"targets"`
-	Config  providers.ProviderConfig `json:"config"`
+	ChatID      string                   `json:"chatId"`
+	Prompt      string                   `json:"prompt"`
+	Attachments []textAttachment         `json:"attachments,omitempty"`
+	Targets     []providers.Target       `json:"targets"`
+	Config      providers.ProviderConfig `json:"config"`
+}
+
+type textAttachment struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+}
+
+func toStateAttachments(in []textAttachment) []state.TextAttachment {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]state.TextAttachment, 0, len(in))
+	for _, v := range in {
+		out = append(out, state.TextAttachment{Name: v.Name, Content: v.Content})
+	}
+	return out
 }
 
 type createFolderRequest struct {
@@ -62,7 +79,8 @@ type regenerateRequest struct {
 }
 
 type editMessageRequest struct {
-	Content string `json:"content"`
+	Content     string           `json:"content"`
+	Attachments []textAttachment `json:"attachments,omitempty"`
 }
 
 type setHistoryIndexRequest struct {
@@ -273,7 +291,7 @@ func main() {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 				return
 			}
-			chat, err := store.EditUserMessageInPlace(parts[0], parts[2], req.Content)
+			chat, err := store.EditUserMessageInPlace(parts[0], parts[2], req.Content, toStateAttachments(req.Attachments))
 			if err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 				return
@@ -476,8 +494,9 @@ func main() {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "chatId is required"})
 			return
 		}
-		if req.Prompt == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "prompt is required"})
+		combinedPrompt := mergePromptAndAttachments(req.Prompt, req.Attachments)
+		if strings.TrimSpace(combinedPrompt) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "prompt or text attachments are required"})
 			return
 		}
 		if len(req.Targets) == 0 {
@@ -510,11 +529,11 @@ func main() {
 			}
 		}
 
-		if err := store.AppendUserPrompt(req.ChatID, req.Prompt); err != nil {
+		if err := store.AppendUserPrompt(req.ChatID, req.Prompt, toStateAttachments(req.Attachments)); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		runStreaming(w, r, registry, req.ChatID, req.Prompt, req.Targets, effectiveConfig, chat.Messages, store, map[string]string{}, false)
+		runStreaming(w, r, registry, req.ChatID, combinedPrompt, req.Targets, effectiveConfig, chat.Messages, store, map[string]string{}, false)
 	})
 
 	server := &http.Server{
@@ -562,7 +581,8 @@ func mergeConfig(base, override providers.ProviderConfig) providers.ProviderConf
 func buildTargetHistory(messages []state.Message, targetID string) []providers.HistoryMessage {
 	history := make([]providers.HistoryMessage, 0, len(messages))
 	for _, msg := range messages {
-		if strings.TrimSpace(msg.Content) == "" || strings.TrimSpace(msg.Role) == "" {
+		content := mergePromptAndStateAttachments(msg.Content, msg.Attachments)
+		if strings.TrimSpace(content) == "" || strings.TrimSpace(msg.Role) == "" {
 			continue
 		}
 		if !messageIncludedForTarget(msg, targetID) {
@@ -570,7 +590,7 @@ func buildTargetHistory(messages []state.Message, targetID string) []providers.H
 		}
 		history = append(history, providers.HistoryMessage{
 			Role:    msg.Role,
-			Content: msg.Content,
+			Content: content,
 		})
 	}
 	return history
@@ -760,4 +780,58 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func mergePromptAndAttachments(prompt string, attachments []textAttachment) string {
+	base := strings.TrimSpace(prompt)
+	if len(attachments) == 0 {
+		return base
+	}
+	parts := make([]string, 0, len(attachments))
+	for _, att := range attachments {
+		name := strings.TrimSpace(att.Name)
+		if name == "" {
+			name = "attachment.txt"
+		}
+		content := strings.TrimSpace(att.Content)
+		if content == "" {
+			continue
+		}
+		parts = append(parts, "File: "+name+"\n"+content)
+	}
+	if len(parts) == 0 {
+		return base
+	}
+	joined := strings.Join(parts, "\n\n---\n\n")
+	if base == "" {
+		return "Attached text files:\n\n" + joined
+	}
+	return base + "\n\nAttached text files:\n\n" + joined
+}
+
+func mergePromptAndStateAttachments(prompt string, attachments []state.TextAttachment) string {
+	base := strings.TrimSpace(prompt)
+	if len(attachments) == 0 {
+		return base
+	}
+	parts := make([]string, 0, len(attachments))
+	for _, att := range attachments {
+		name := strings.TrimSpace(att.Name)
+		if name == "" {
+			name = "attachment.txt"
+		}
+		content := strings.TrimSpace(att.Content)
+		if content == "" {
+			continue
+		}
+		parts = append(parts, "File: "+name+"\n"+content)
+	}
+	if len(parts) == 0 {
+		return base
+	}
+	joined := strings.Join(parts, "\n\n---\n\n")
+	if base == "" {
+		return "Attached text files:\n\n" + joined
+	}
+	return base + "\n\nAttached text files:\n\n" + joined
 }

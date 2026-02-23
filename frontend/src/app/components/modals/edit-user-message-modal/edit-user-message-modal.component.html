@@ -6,6 +6,24 @@
   </div>
 
   <article class="config-block">
+    <div class="file-input-row">
+      <label class="file-input-btn">
+        Add text files
+        <input
+          type="file"
+          accept=".txt,.md,.csv,.json,text/plain,text/markdown,text/csv,application/json"
+          multiple
+          (change)="onFileChange($event)"
+        />
+      </label>
+      <span class="muted" *ngIf="attachments.length > 0">{{ attachments.length }} file(s)</span>
+    </div>
+    <div class="attachment-list" *ngIf="attachments.length > 0">
+      <span class="attachment-chip" *ngFor="let file of attachments; let i = index">
+        {{ file.name }}
+        <button type="button" (click)="removeAttachment.emit(i)" aria-label="Remove file">×</button>
+      </span>
+    </div>
     <label>
       Message
       <textarea rows="6" [ngModel]="content" (ngModelChange)="contentChange.emit($event)"></textarea>

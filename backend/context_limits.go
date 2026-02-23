@@ -18,10 +18,11 @@ import (
 )
 
 type contextLimitsRequest struct {
-	Targets []providers.Target       `json:"targets"`
-	Config  providers.ProviderConfig `json:"config"`
-	ChatID  string                   `json:"chatId,omitempty"`
-	Prompt  string                   `json:"prompt,omitempty"`
+	Targets     []providers.Target       `json:"targets"`
+	Config      providers.ProviderConfig `json:"config"`
+	ChatID      string                   `json:"chatId,omitempty"`
+	Prompt      string                   `json:"prompt,omitempty"`
+	Attachments []textAttachment         `json:"attachments,omitempty"`
 }
 
 type contextLimitItem struct {
@@ -42,7 +43,7 @@ type contextLimitsResponse struct {
 func resolveContextLimits(req contextLimitsRequest, stored providers.ProviderConfig, baseHistory []state.Message) []contextLimitItem {
 	effective := mergeConfig(stored, req.Config)
 	out := make([]contextLimitItem, len(req.Targets))
-	prompt := strings.TrimSpace(req.Prompt)
+	prompt := mergePromptAndAttachments(req.Prompt, req.Attachments)
 
 	client := &http.Client{Timeout: 12 * time.Second}
 	var wg sync.WaitGroup
