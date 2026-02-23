@@ -50,6 +50,7 @@ export class AppComponent implements OnInit {
   private abortController?: AbortController;
   openMessageMenuId = '';
   regeneratingMessageId = '';
+  regeneratingUserReplaceByTarget = new Map<string, string>();
   showEditMessageModal = false;
   editingUserMessageId = '';
   editingUserMessageContent = '';
@@ -261,6 +262,7 @@ export class AppComponent implements OnInit {
     this.prompt = '';
     this.isStreaming = true;
     this.liveAssistantIndexByTarget.clear();
+    this.regeneratingUserReplaceByTarget.clear();
     this.abortController = new AbortController();
 
     this.pushLocalMessage({
@@ -296,9 +298,11 @@ export class AppComponent implements OnInit {
           onError: (err) => {
             this.error = err.message;
             this.isStreaming = false;
+            this.regeneratingUserReplaceByTarget.clear();
           },
           onComplete: () => {
             this.isStreaming = false;
+            this.regeneratingUserReplaceByTarget.clear();
             void this.refreshAfterStream();
           }
         },
@@ -307,6 +311,7 @@ export class AppComponent implements OnInit {
     } catch (err) {
       this.error = (err as Error).message;
       this.isStreaming = false;
+      this.regeneratingUserReplaceByTarget.clear();
     }
   }
 
@@ -314,6 +319,7 @@ export class AppComponent implements OnInit {
     this.abortController?.abort();
     this.isStreaming = false;
     this.regeneratingMessageId = '';
+    this.regeneratingUserReplaceByTarget.clear();
   }
 
   openSettings(): void {
@@ -445,6 +451,7 @@ export class AppComponent implements OnInit {
     if (!this.selectedChatId || !this.editingUserMessageId) {
       return;
     }
+    const editedMessageId = this.editingUserMessageId;
     const content = this.editingUserMessageContent.trim();
     if (!content) {
       this.error = 'Edited message cannot be empty.';
@@ -453,17 +460,25 @@ export class AppComponent implements OnInit {
 
     try {
       if (this.editingUserMessageMode === 'inplace') {
-        await this.chatService.editUserMessage(this.selectedChatId, this.editingUserMessageId, content);
+        await this.chatService.editUserMessage(this.selectedChatId, editedMessageId, content);
         await this.reloadChats(this.selectedChatId);
         this.closeEditUserMessageModal();
+        const edited = this.selectedChat?.messages.find((m) => m.id === editedMessageId);
+        if (edited) {
+          await this.regenerateFromMessage(edited);
+        }
         return;
       }
 
-      const fork = await this.chatService.forkChat(this.selectedChatId, this.editingUserMessageId);
-      await this.chatService.editUserMessage(fork.id, this.editingUserMessageId, content);
+      const fork = await this.chatService.forkChat(this.selectedChatId, editedMessageId);
+      await this.chatService.editUserMessage(fork.id, editedMessageId, content);
       await this.reloadFolders(fork.folderId);
       await this.reloadChats(fork.id);
       this.closeEditUserMessageModal();
+      const edited = this.selectedChat?.messages.find((m) => m.id === editedMessageId);
+      if (edited) {
+        await this.regenerateFromMessage(edited);
+      }
     } catch (err) {
       this.error = (err as Error).message;
     }
@@ -477,8 +492,10 @@ export class AppComponent implements OnInit {
     if (message.role === 'assistant' && message.provider && message.model) {
       targets = [{ provider: message.provider, model: message.model }];
       this.regeneratingMessageId = message.id;
+      this.regeneratingUserReplaceByTarget.clear();
     } else {
       this.regeneratingMessageId = '';
+      this.regeneratingUserReplaceByTarget = this.findAssistantTargetsAfterUserMessage(message.id);
       if (targets.length === 0) {
         this.error = 'Choose at least one LLM in Quick Selector.';
         return;
@@ -517,6 +534,7 @@ export class AppComponent implements OnInit {
           onComplete: () => {
             this.isStreaming = false;
             this.regeneratingMessageId = '';
+            this.regeneratingUserReplaceByTarget.clear();
             void this.refreshAfterStream();
           }
         },
@@ -526,6 +544,54 @@ export class AppComponent implements OnInit {
       this.error = (err as Error).message;
       this.isStreaming = false;
       this.regeneratingMessageId = '';
+      this.regeneratingUserReplaceByTarget.clear();
+    }
+  }
+
+  canMoveMessageHistory(message: Message): boolean {
+    return (message.history?.length ?? 0) > 1;
+  }
+
+  messageHistoryPosition(message: Message): string {
+    const total = message.history?.length ?? 0;
+    if (total <= 1) {
+      return '1/1';
+    }
+    const idx = message.historyIndex ?? total - 1;
+    return `${idx + 1}/${total}`;
+  }
+
+  async moveMessageHistory(message: Message, delta: -1 | 1): Promise<void> {
+    if (!this.selectedChatId || !this.canMoveMessageHistory(message)) {
+      return;
+    }
+    const total = message.history?.length ?? 0;
+    const current = message.historyIndex ?? total - 1;
+    const next = current + delta;
+    if (next < 0 || next >= total) {
+      return;
+    }
+
+    message.historyIndex = next;
+    const selected = message.history?.[next];
+    if (selected) {
+      message.content = selected.content;
+      message.provider = selected.provider;
+      message.model = selected.model;
+      message.targetId = selected.targetId;
+      if (message.inclusion === 'model_only') {
+        message.scopeId = message.targetId ?? '';
+      }
+    }
+    if (this.selectedChat) {
+      this.selectedChat.messages = [...this.selectedChat.messages];
+    }
+
+    try {
+      await this.chatService.setMessageHistoryIndex(this.selectedChatId, message.id, next);
+    } catch (err) {
+      this.error = (err as Error).message;
+      await this.reloadChats(this.selectedChatId);
     }
   }
 
@@ -611,6 +677,36 @@ export class AppComponent implements OnInit {
     return targets;
   }
 
+  private findAssistantTargetsAfterUserMessage(messageId: string): Map<string, string> {
+    const map = new Map<string, string>();
+    if (!this.selectedChat) {
+      return map;
+    }
+
+    const messages = this.selectedChat.messages;
+    const startIdx = messages.findIndex((m) => m.id === messageId);
+    if (startIdx < 0 || messages[startIdx].role !== 'user') {
+      return map;
+    }
+
+    for (let i = startIdx + 1; i < messages.length; i++) {
+      const msg = messages[i];
+      if (msg.role === 'user') {
+        break;
+      }
+      if (msg.role !== 'assistant') {
+        continue;
+      }
+      const targetId = (msg.targetId ?? '').trim();
+      if (!targetId) {
+        continue;
+      }
+      map.set(targetId, msg.id);
+    }
+
+    return map;
+  }
+
   private handleEvent(event: StreamEvent): void {
     if (event.event === 'done') {
       this.isStreaming = false;
@@ -624,6 +720,24 @@ export class AppComponent implements OnInit {
     if (event.event === 'start') {
       if (this.regeneratingMessageId) {
         const replaceIdx = this.selectedChat.messages.findIndex((m) => m.id === this.regeneratingMessageId);
+        if (replaceIdx >= 0) {
+          const existing = this.selectedChat.messages[replaceIdx];
+          existing.provider = event.provider;
+          existing.model = event.model;
+          existing.targetId = event.targetId;
+          existing.inclusion = 'model_only';
+          existing.scopeId = event.targetId;
+          existing.status = 'streaming';
+          existing.error = '';
+          existing.content = '';
+          this.selectedChat.messages = [...this.selectedChat.messages];
+          this.liveAssistantIndexByTarget.set(event.targetId, replaceIdx);
+          return;
+        }
+      }
+      if (this.regeneratingUserReplaceByTarget.has(event.targetId)) {
+        const messageId = this.regeneratingUserReplaceByTarget.get(event.targetId) ?? '';
+        const replaceIdx = this.selectedChat.messages.findIndex((m) => m.id === messageId);
         if (replaceIdx >= 0) {
           const existing = this.selectedChat.messages[replaceIdx];
           existing.provider = event.provider;

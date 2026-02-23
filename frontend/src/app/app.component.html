@@ -113,6 +113,27 @@
             <span class="status" *ngIf="msg.status" [class.streaming]="msg.status === 'streaming'" [class.done]="msg.status === 'done'" [class.error]="msg.status === 'error'">
               {{ msg.status }}
             </span>
+            <div class="msg-history-nav" *ngIf="canMoveMessageHistory(msg)">
+              <button
+                type="button"
+                class="history-btn"
+                [disabled]="(msg.historyIndex ?? ((msg.history?.length ?? 1) - 1)) <= 0"
+                (click)="moveMessageHistory(msg, -1)"
+                title="Show previous assistant version"
+              >
+                &lt;
+              </button>
+              <span class="history-pos">{{ messageHistoryPosition(msg) }}</span>
+              <button
+                type="button"
+                class="history-btn"
+                [disabled]="(msg.historyIndex ?? ((msg.history?.length ?? 1) - 1)) >= ((msg.history?.length ?? 1) - 1)"
+                (click)="moveMessageHistory(msg, 1)"
+                title="Show newer assistant version"
+              >
+                &gt;
+              </button>
+            </div>
             <div class="msg-menu-wrap" (click)="$event.stopPropagation()">
               <button
                 type="button"

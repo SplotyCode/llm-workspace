@@ -32,6 +32,16 @@ type Message struct {
 	TargetID  string    `json:"targetId,omitempty"`
 	Inclusion string    `json:"inclusion,omitempty"`
 	ScopeID   string    `json:"scopeId,omitempty"`
+	History   []MessageVersion `json:"history,omitempty"`
+	HistoryIndex int           `json:"historyIndex,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+type MessageVersion struct {
+	Content   string    `json:"content"`
+	Provider  string    `json:"provider,omitempty"`
+	Model     string    `json:"model,omitempty"`
+	TargetID  string    `json:"targetId,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 
@@ -138,6 +148,7 @@ func (s *Store) load() error {
 			if msg.Inclusion == "model_only" && strings.TrimSpace(msg.ScopeID) == "" {
 				msg.ScopeID = msg.TargetID
 			}
+			ensureMessageHistory(msg)
 		}
 	}
 	return nil
@@ -399,6 +410,54 @@ func (s *Store) PrepareRegenerate(chatID, messageID string) (chat Chat, prompt s
 	return s.data.Chats[chatIdx], prompt, history, nil
 }
 
+func (s *Store) PrepareUserRegenerate(chatID, messageID string) (chat Chat, prompt string, history []Message, replaceByTarget map[string]string, err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	chatIdx := -1
+	for i := range s.data.Chats {
+		if s.data.Chats[i].ID == chatID {
+			chatIdx = i
+			break
+		}
+	}
+	if chatIdx < 0 {
+		return Chat{}, "", nil, nil, errors.New("chat not found")
+	}
+
+	msgIdx := indexOfMessage(s.data.Chats[chatIdx].Messages, messageID)
+	if msgIdx < 0 {
+		return Chat{}, "", nil, nil, errors.New("message not found")
+	}
+	if s.data.Chats[chatIdx].Messages[msgIdx].Role != "user" {
+		return Chat{}, "", nil, nil, errors.New("message is not user")
+	}
+
+	prompt = s.data.Chats[chatIdx].Messages[msgIdx].Content
+	history = cloneMessages(s.data.Chats[chatIdx].Messages[:msgIdx])
+	replaceByTarget = map[string]string{}
+
+	for i := msgIdx + 1; i < len(s.data.Chats[chatIdx].Messages); i++ {
+		msg := s.data.Chats[chatIdx].Messages[i]
+		if msg.Role == "user" {
+			break
+		}
+		if msg.Role != "assistant" {
+			continue
+		}
+		targetID := strings.TrimSpace(msg.TargetID)
+		if targetID == "" && strings.TrimSpace(msg.Provider) != "" && strings.TrimSpace(msg.Model) != "" {
+			targetID = strings.ToLower(strings.TrimSpace(msg.Provider)) + ":" + strings.TrimSpace(msg.Model)
+		}
+		if targetID == "" {
+			continue
+		}
+		replaceByTarget[targetID] = msg.ID
+	}
+
+	return s.data.Chats[chatIdx], prompt, history, replaceByTarget, nil
+}
+
 func (s *Store) PrepareAssistantRegenerate(chatID, messageID string) (chat Chat, prompt string, history []Message, target Message, err error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -452,14 +511,18 @@ func (s *Store) ReplaceAssistantMessage(chatID, messageID string, replacement Me
 		if s.data.Chats[i].ID != chatID {
 			continue
 		}
-		for j := range s.data.Chats[i].Messages {
-			if s.data.Chats[i].Messages[j].ID != messageID {
-				continue
-			}
-			orig := s.data.Chats[i].Messages[j]
-			s.data.Chats[i].Messages[j].Role = "assistant"
-			s.data.Chats[i].Messages[j].Content = replacement.Content
-			s.data.Chats[i].Messages[j].Provider = replacement.Provider
+        for j := range s.data.Chats[i].Messages {
+            if s.data.Chats[i].Messages[j].ID != messageID {
+                continue
+            }
+            orig := s.data.Chats[i].Messages[j]
+            if orig.Role != "assistant" {
+                return errors.New("target message is not assistant")
+            }
+            ensureMessageHistory(&orig)
+            s.data.Chats[i].Messages[j].Role = "assistant"
+            s.data.Chats[i].Messages[j].Content = replacement.Content
+            s.data.Chats[i].Messages[j].Provider = replacement.Provider
 			s.data.Chats[i].Messages[j].Model = replacement.Model
 			s.data.Chats[i].Messages[j].TargetID = replacement.TargetID
 			s.data.Chats[i].Messages[j].Inclusion = replacement.Inclusion
@@ -468,13 +531,18 @@ func (s *Store) ReplaceAssistantMessage(chatID, messageID string, replacement Me
 			if s.data.Chats[i].Messages[j].Inclusion == "" {
 				s.data.Chats[i].Messages[j].Inclusion = "model_only"
 			}
-			if s.data.Chats[i].Messages[j].ScopeID == "" {
-				s.data.Chats[i].Messages[j].ScopeID = s.data.Chats[i].Messages[j].TargetID
-			}
-			if orig.Role != "assistant" {
-				return errors.New("target message is not assistant")
-			}
-			s.data.Chats[i].UpdatedAt = time.Now().UTC()
+            if s.data.Chats[i].Messages[j].ScopeID == "" {
+                s.data.Chats[i].Messages[j].ScopeID = s.data.Chats[i].Messages[j].TargetID
+            }
+            s.data.Chats[i].Messages[j].History = append(orig.History, MessageVersion{
+                Content:   replacement.Content,
+                Provider:  replacement.Provider,
+                Model:     replacement.Model,
+                TargetID:  replacement.TargetID,
+                CreatedAt: time.Now().UTC(),
+            })
+            s.data.Chats[i].Messages[j].HistoryIndex = len(s.data.Chats[i].Messages[j].History) - 1
+            s.data.Chats[i].UpdatedAt = time.Now().UTC()
 			if err := s.touchFolderLocked(s.data.Chats[i].FolderID); err != nil {
 				return err
 			}
@@ -502,13 +570,22 @@ func (s *Store) EditUserMessageInPlace(chatID, messageID, content string) (Chat,
 		if msgIdx < 0 {
 			return Chat{}, errors.New("message not found")
 		}
-		if s.data.Chats[i].Messages[msgIdx].Role != "user" {
-			return Chat{}, errors.New("only user messages can be edited")
-		}
+			if s.data.Chats[i].Messages[msgIdx].Role != "user" {
+				return Chat{}, errors.New("only user messages can be edited")
+			}
 
-		s.data.Chats[i].Messages[msgIdx].Content = content
-		s.data.Chats[i].Messages[msgIdx].CreatedAt = time.Now().UTC()
-		s.data.Chats[i].Messages = cloneMessages(s.data.Chats[i].Messages[:msgIdx+1])
+			ensureMessageHistory(&s.data.Chats[i].Messages[msgIdx])
+			s.data.Chats[i].Messages[msgIdx].History = append(s.data.Chats[i].Messages[msgIdx].History, MessageVersion{
+				Content:   content,
+				CreatedAt: time.Now().UTC(),
+			})
+			s.data.Chats[i].Messages[msgIdx].HistoryIndex = len(s.data.Chats[i].Messages[msgIdx].History) - 1
+			s.data.Chats[i].Messages[msgIdx].Content = content
+			s.data.Chats[i].Messages[msgIdx].Provider = ""
+			s.data.Chats[i].Messages[msgIdx].Model = ""
+			s.data.Chats[i].Messages[msgIdx].TargetID = ""
+			s.data.Chats[i].Messages[msgIdx].CreatedAt = time.Now().UTC()
+			s.data.Chats[i].Messages = cloneMessages(s.data.Chats[i].Messages[:msgIdx+1])
 		s.data.Chats[i].UpdatedAt = time.Now().UTC()
 		if err := s.touchFolderLocked(s.data.Chats[i].FolderID); err != nil {
 			return Chat{}, err
@@ -530,13 +607,18 @@ func (s *Store) AppendUserPrompt(chatID, prompt string) error {
 			continue
 		}
 		now := time.Now().UTC()
-			s.data.Chats[i].Messages = append(s.data.Chats[i].Messages, Message{
-				ID:        newID("msg"),
-				Role:      "user",
-				Content:   prompt,
-				Inclusion: "always",
-				CreatedAt: now,
-			})
+				s.data.Chats[i].Messages = append(s.data.Chats[i].Messages, Message{
+					ID:        newID("msg"),
+					Role:      "user",
+					Content:   prompt,
+					Inclusion: "always",
+					History: []MessageVersion{{
+						Content:   prompt,
+						CreatedAt: now,
+					}},
+					HistoryIndex: 0,
+					CreatedAt: now,
+				})
 		if len(s.data.Chats[i].Messages) == 1 && strings.TrimSpace(s.data.Chats[i].Title) == "New Chat" {
 			s.data.Chats[i].Title = trimTitle(prompt)
 		}
@@ -558,21 +640,29 @@ func (s *Store) AppendAssistantMessages(chatID string, outputs []Message) error 
 			continue
 		}
 		now := time.Now().UTC()
-			for _, out := range outputs {
-				if strings.TrimSpace(out.Content) == "" {
-					continue
-				}
-				out.ID = newID("msg")
-				out.Role = "assistant"
-				if strings.TrimSpace(out.Inclusion) == "" {
-					out.Inclusion = "model_only"
-				}
-				if out.Inclusion == "model_only" && strings.TrimSpace(out.ScopeID) == "" {
-					out.ScopeID = out.TargetID
-				}
-				out.CreatedAt = now
-				s.data.Chats[i].Messages = append(s.data.Chats[i].Messages, out)
-			}
+        for _, out := range outputs {
+            if strings.TrimSpace(out.Content) == "" {
+                continue
+            }
+            out.ID = newID("msg")
+            out.Role = "assistant"
+            if strings.TrimSpace(out.Inclusion) == "" {
+                out.Inclusion = "model_only"
+            }
+            if out.Inclusion == "model_only" && strings.TrimSpace(out.ScopeID) == "" {
+                out.ScopeID = out.TargetID
+            }
+            out.History = []MessageVersion{{
+                Content:   out.Content,
+                Provider:  out.Provider,
+                Model:     out.Model,
+                TargetID:  out.TargetID,
+                CreatedAt: now,
+            }}
+            out.HistoryIndex = 0
+            out.CreatedAt = now
+            s.data.Chats[i].Messages = append(s.data.Chats[i].Messages, out)
+        }
 		s.data.Chats[i].UpdatedAt = now
 		if err := s.touchFolderLocked(s.data.Chats[i].FolderID); err != nil {
 			return err
@@ -621,6 +711,47 @@ func (s *Store) UpdateMessageInclusion(chatID, messageID, inclusion, scopeID str
 	return Message{}, errors.New("chat not found")
 }
 
+func (s *Store) SetMessageHistoryIndex(chatID, messageID string, index int) (Message, error) {
+	if index < 0 {
+		return Message{}, errors.New("invalid history index")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.data.Chats {
+		if s.data.Chats[i].ID != chatID {
+			continue
+		}
+		for j := range s.data.Chats[i].Messages {
+			msg := &s.data.Chats[i].Messages[j]
+			if msg.ID != messageID {
+				continue
+			}
+			ensureMessageHistory(msg)
+			if index >= len(msg.History) {
+				return Message{}, errors.New("history index out of range")
+			}
+			msg.HistoryIndex = index
+			version := msg.History[index]
+			msg.Content = version.Content
+			msg.Provider = version.Provider
+			msg.Model = version.Model
+			msg.TargetID = version.TargetID
+			if msg.Inclusion == "model_only" && msg.Role == "assistant" {
+				msg.ScopeID = msg.TargetID
+			}
+			s.data.Chats[i].UpdatedAt = time.Now().UTC()
+			if err := s.persistLocked(); err != nil {
+				return Message{}, err
+			}
+			return *msg, nil
+		}
+		return Message{}, errors.New("message not found")
+	}
+	return Message{}, errors.New("chat not found")
+}
+
 func normalizeInclusion(v string) string {
 	switch strings.TrimSpace(strings.ToLower(v)) {
 	case "dont_include", "model_only", "always":
@@ -645,6 +776,30 @@ func cloneMessages(messages []Message) []Message {
 		out = append(out, m)
 	}
 	return out
+}
+
+func ensureMessageHistory(msg *Message) {
+	if msg == nil {
+		return
+	}
+	if len(msg.History) == 0 {
+		msg.History = []MessageVersion{{
+			Content:   msg.Content,
+			Provider:  msg.Provider,
+			Model:     msg.Model,
+			TargetID:  msg.TargetID,
+			CreatedAt: msg.CreatedAt,
+		}}
+		msg.HistoryIndex = 0
+	}
+	if msg.HistoryIndex < 0 || msg.HistoryIndex >= len(msg.History) {
+		msg.HistoryIndex = len(msg.History) - 1
+	}
+	current := msg.History[msg.HistoryIndex]
+	msg.Content = current.Content
+	msg.Provider = current.Provider
+	msg.Model = current.Model
+	msg.TargetID = current.TargetID
 }
 
 func (s *Store) touchFolderLocked(folderID string) error {

@@ -65,6 +65,10 @@ type editMessageRequest struct {
 	Content string `json:"content"`
 }
 
+type setHistoryIndexRequest struct {
+	Index int `json:"index"`
+}
+
 type providerInfo struct {
 	ID     string   `json:"id"`
 	Name   string   `json:"name"`
@@ -206,6 +210,25 @@ func main() {
 			return
 		}
 
+		if len(parts) == 4 && parts[1] == "messages" && parts[3] == "history" {
+			if r.Method != http.MethodPatch {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			var req setHistoryIndexRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+				return
+			}
+			updated, err := store.SetMessageHistoryIndex(parts[0], parts[2], req.Index)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, updated)
+			return
+		}
+
 		if len(parts) == 4 && parts[1] == "messages" && parts[3] == "edit" {
 			if r.Method != http.MethodPost {
 				w.WriteHeader(http.StatusMethodNotAllowed)
@@ -277,7 +300,7 @@ func main() {
 					t := *folder.Temperature
 					target.Temperature = &t
 				}
-				runStreaming(w, r, registry, parts[0], prompt, []providers.Target{target}, effectiveConfig, history, store, req.MessageID)
+				runStreaming(w, r, registry, parts[0], prompt, []providers.Target{target}, effectiveConfig, history, store, map[string]string{target.Provider + ":" + target.Model: req.MessageID})
 				return
 			}
 
@@ -286,7 +309,7 @@ func main() {
 				return
 			}
 
-			chat, prompt, history, err := store.PrepareRegenerate(parts[0], req.MessageID)
+			chat, prompt, history, replaceByTarget, err := store.PrepareUserRegenerate(parts[0], req.MessageID)
 			if err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 				return
@@ -308,7 +331,7 @@ func main() {
 				}
 			}
 
-			runStreaming(w, r, registry, parts[0], prompt, req.Targets, effectiveConfig, history, store, "")
+			runStreaming(w, r, registry, parts[0], prompt, req.Targets, effectiveConfig, history, store, replaceByTarget)
 			return
 		}
 
@@ -399,7 +422,7 @@ func main() {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 				return
 			}
-			runStreaming(w, r, registry, req.ChatID, req.Prompt, req.Targets, effectiveConfig, chat.Messages, store, "")
+			runStreaming(w, r, registry, req.ChatID, req.Prompt, req.Targets, effectiveConfig, chat.Messages, store, map[string]string{})
 		})
 
 	server := &http.Server{
@@ -498,7 +521,7 @@ func runStreaming(
 	effectiveConfig providers.ProviderConfig,
 	baseHistory []state.Message,
 	store *state.Store,
-	replaceMessageID string,
+	replaceByTarget map[string]string,
 ) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -592,14 +615,18 @@ func runStreaming(
 	for _, out := range outputs {
 		assistantMessages = append(assistantMessages, out)
 	}
-	if replaceMessageID != "" {
-		if len(assistantMessages) > 0 {
-			if err := store.ReplaceAssistantMessage(chatID, replaceMessageID, assistantMessages[0]); err != nil {
+	appendList := make([]state.Message, 0, len(assistantMessages))
+	for _, out := range assistantMessages {
+		if messageID, ok := replaceByTarget[out.TargetID]; ok && strings.TrimSpace(messageID) != "" {
+			if err := store.ReplaceAssistantMessage(chatID, messageID, out); err != nil {
 				log.Printf("replace assistant message failed: %v", err)
 			}
+		} else {
+			appendList = append(appendList, out)
 		}
-	} else {
-		if err := store.AppendAssistantMessages(chatID, assistantMessages); err != nil {
+	}
+	if len(appendList) > 0 {
+		if err := store.AppendAssistantMessages(chatID, appendList); err != nil {
 			log.Printf("persist assistant messages failed: %v", err)
 		}
 	}

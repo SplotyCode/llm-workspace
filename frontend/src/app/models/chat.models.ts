@@ -69,8 +69,18 @@ export interface Message {
   targetId?: string;
   inclusion?: 'dont_include' | 'model_only' | 'always';
   scopeId?: string;
+  history?: MessageVersion[];
+  historyIndex?: number;
   status?: 'streaming' | 'done' | 'error';
   error?: string;
+  createdAt: string;
+}
+
+export interface MessageVersion {
+  content: string;
+  provider?: string;
+  model?: string;
+  targetId?: string;
   createdAt: string;
 }
 

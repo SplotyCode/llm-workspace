@@ -188,6 +188,18 @@ export class ChatService {
     }
   }
 
+  async setMessageHistoryIndex(chatId: string, messageId: string, index: number): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/api/chats/${chatId}/messages/${messageId}/history`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ index })
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(body || `Failed to set message history index (${res.status})`);
+    }
+  }
+
   async streamChat(request: ChatRequest, callbacks: StreamCallbacks, signal?: AbortSignal): Promise<void> {
     await this.streamFromEndpoint(`${this.baseUrl}/api/chat/stream`, request, callbacks, signal);
   }

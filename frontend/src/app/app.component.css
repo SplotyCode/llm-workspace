@@ -373,6 +373,42 @@
   background: #fff5f5;
 }
 
+.msg-history-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  border: 1px solid #cbd8dc;
+  border-radius: 999px;
+  padding: 0.1rem 0.2rem;
+  background: #f8fbfc;
+}
+
+.history-btn {
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: #35525c;
+  padding: 0;
+  line-height: 1;
+}
+
+.history-btn:hover:not([disabled]) {
+  background: #eaf3f6;
+}
+
+.history-btn[disabled] {
+  opacity: 0.35;
+}
+
+.history-pos {
+  font-size: 0.68rem;
+  color: #4c6871;
+  min-width: 2rem;
+  text-align: center;
+}
+
 textarea,
 input {
   width: 100%;
