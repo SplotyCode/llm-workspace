@@ -1,4 +1,4 @@
-<div class="page" (click)="closeMessageMenu()">
+<div class="page" (click)="closeMessageMenu(); closeInclusionMenu()">
   <header class="topbar">
     <div>
       <h1>LLM Workspace</h1>
@@ -98,55 +98,67 @@
           <div class="msg-meta">
             <strong>{{ msg.role }}</strong>
             <span *ngIf="msg.provider && msg.model">{{ msg.provider }} · {{ msg.model }}</span>
-            <div class="include-control" role="group" aria-label="Message context policy">
-              <button
-                type="button"
-                class="include-option"
-                *ngFor="let option of messageInclusionOptions(msg)"
-                [class.active]="messageInclusionValue(msg) === option.value"
-                (click)="onMessageInclusionChange(msg, option.value)"
-                [attr.title]="inclusionOptionTitle(option.value)"
-              >
-                {{ option.label }}
-              </button>
-            </div>
-            <span class="status" *ngIf="msg.status" [class.streaming]="msg.status === 'streaming'" [class.done]="msg.status === 'done'" [class.error]="msg.status === 'error'">
-              {{ msg.status }}
-            </span>
-            <div class="msg-history-nav" *ngIf="canMoveMessageHistory(msg)">
-              <button
-                type="button"
-                class="history-btn"
-                [disabled]="(msg.historyIndex ?? ((msg.history?.length ?? 1) - 1)) <= 0"
-                (click)="moveMessageHistory(msg, -1)"
-                title="Show previous assistant version"
-              >
-                &lt;
-              </button>
-              <span class="history-pos">{{ messageHistoryPosition(msg) }}</span>
-              <button
-                type="button"
-                class="history-btn"
-                [disabled]="(msg.historyIndex ?? ((msg.history?.length ?? 1) - 1)) >= ((msg.history?.length ?? 1) - 1)"
-                (click)="moveMessageHistory(msg, 1)"
-                title="Show newer assistant version"
-              >
-                &gt;
-              </button>
-            </div>
-            <div class="msg-menu-wrap" (click)="$event.stopPropagation()">
-              <button
-                type="button"
-                class="msg-menu-btn"
-                aria-label="Message actions"
-                (click)="toggleMessageMenu(msg.id, $event)"
-              >
-                ⋯
-              </button>
-              <div class="msg-menu" *ngIf="openMessageMenuId === msg.id">
-                <button type="button" (click)="regenerateFromMessage(msg)">Regenerate</button>
-                <button type="button" (click)="forkFromMessage(msg)">Fork chat from here</button>
-                <button type="button" *ngIf="msg.role === 'user'" (click)="openEditUserMessage(msg)">Edit message</button>
+            <div class="msg-actions">
+              <span class="status" *ngIf="msg.status" [class.streaming]="msg.status === 'streaming'" [class.done]="msg.status === 'done'" [class.error]="msg.status === 'error'">
+                {{ msg.status }}
+              </span>
+              <div class="msg-history-nav" *ngIf="canMoveMessageHistory(msg)">
+                <button
+                  type="button"
+                  class="history-btn"
+                  [disabled]="(msg.historyIndex ?? ((msg.history?.length ?? 1) - 1)) <= 0"
+                  (click)="moveMessageHistory(msg, -1)"
+                  title="Show previous assistant version"
+                >
+                  &lt;
+                </button>
+                <span class="history-pos">{{ messageHistoryPosition(msg) }}</span>
+                <button
+                  type="button"
+                  class="history-btn"
+                  [disabled]="(msg.historyIndex ?? ((msg.history?.length ?? 1) - 1)) >= ((msg.history?.length ?? 1) - 1)"
+                  (click)="moveMessageHistory(msg, 1)"
+                  title="Show newer assistant version"
+                >
+                  &gt;
+                </button>
+              </div>
+              <div class="include-wrap" (click)="$event.stopPropagation()">
+                <button
+                  type="button"
+                  class="include-current"
+                  (click)="toggleInclusionMenu(msg.id, $event)"
+                  [attr.title]="inclusionOptionTitle(messageInclusionValue(msg))"
+                >
+                  {{ inclusionDisplayLabel(msg) }}
+                </button>
+                <div class="include-control" *ngIf="openInclusionMessageId === msg.id" role="group" aria-label="Message context policy">
+                  <button
+                    type="button"
+                    class="include-option"
+                    *ngFor="let option of messageInclusionOptions(msg)"
+                    [class.active]="messageInclusionValue(msg) === option.value"
+                    (click)="onMessageInclusionChange(msg, option.value); closeInclusionMenu()"
+                    [attr.title]="inclusionOptionTitle(option.value)"
+                  >
+                    {{ option.label }}
+                  </button>
+                </div>
+              </div>
+              <div class="msg-menu-wrap" (click)="$event.stopPropagation()">
+                <button
+                  type="button"
+                  class="msg-menu-btn"
+                  aria-label="Message actions"
+                  (click)="toggleMessageMenu(msg.id, $event)"
+                >
+                  ⋯
+                </button>
+                <div class="msg-menu" *ngIf="openMessageMenuId === msg.id">
+                  <button type="button" (click)="regenerateFromMessage(msg)">Regenerate</button>
+                  <button type="button" (click)="forkFromMessage(msg)">Fork chat from here</button>
+                  <button type="button" *ngIf="msg.role === 'user'" (click)="openEditUserMessage(msg)">Edit message</button>
+                </div>
               </div>
             </div>
           </div>

@@ -49,6 +49,7 @@ export class AppComponent implements OnInit {
   private liveAssistantIndexByTarget = new Map<string, number>();
   private abortController?: AbortController;
   openMessageMenuId = '';
+  openInclusionMessageId = '';
   regeneratingMessageId = '';
   regeneratingUserReplaceByTarget = new Map<string, string>();
   showEditMessageModal = false;
@@ -415,6 +416,15 @@ export class AppComponent implements OnInit {
     this.openMessageMenuId = '';
   }
 
+  toggleInclusionMenu(messageId: string, event?: MouseEvent): void {
+    event?.stopPropagation();
+    this.openInclusionMessageId = this.openInclusionMessageId === messageId ? '' : messageId;
+  }
+
+  closeInclusionMenu(): void {
+    this.openInclusionMessageId = '';
+  }
+
   async forkFromMessage(message: Message): Promise<void> {
     if (!this.selectedChatId) {
       return;
@@ -603,6 +613,13 @@ export class AppComponent implements OnInit {
       return 'Include this message only when generating with this specific model.';
     }
     return 'Include this message for all models in future prompts.';
+  }
+
+  inclusionDisplayLabel(message: Message): string {
+    const v = this.messageInclusionValue(message);
+    if (v === 'dont_include') return "don't include";
+    if (v === 'always') return 'always include';
+    return 'this model';
   }
 
   private async reloadFolders(preferredFolderId?: string): Promise<void> {
