@@ -1,0 +1,19 @@
+<div class="context-indicator">
+  <span class="context-pill" [class.loading]="isLoading">
+    <ng-container *ngIf="minItem; else noContextData">
+      Ctx used: {{ minItem.usedPercent }}%
+    </ng-container>
+    <ng-template #noContextData>
+      {{ isLoading ? 'Ctx used: loading...' : 'Ctx used: n/a' }}
+    </ng-template>
+  </span>
+  <div class="context-popover">
+    <div class="context-popover-title">Context windows</div>
+    <div class="context-row" *ngFor="let item of items">
+      <span>{{ item.provider }} · {{ item.model }}</span>
+      <strong *ngIf="item.usedPercent != null && !item.error">{{ item.usedPercent }}% ({{ item.estimatedTokens }}/{{ item.maxContextTokens }})</strong>
+      <strong *ngIf="item.usedPercent == null || item.error">n/a</strong>
+    </div>
+    <div class="context-row context-error" *ngIf="error">{{ error }}</div>
+  </div>
+</div>

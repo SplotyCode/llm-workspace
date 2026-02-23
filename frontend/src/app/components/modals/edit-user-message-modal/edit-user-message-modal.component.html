@@ -1,0 +1,41 @@
+<div class="modal-backdrop" *ngIf="show" (click)="close.emit()"></div>
+<section class="modal" *ngIf="show" role="dialog" aria-modal="true">
+  <div class="row-head">
+    <h2>Edit User Message</h2>
+    <button class="secondary" (click)="close.emit()">Close</button>
+  </div>
+
+  <article class="config-block">
+    <label>
+      Message
+      <textarea rows="6" [ngModel]="content" (ngModelChange)="contentChange.emit($event)"></textarea>
+    </label>
+    <div class="edit-mode">
+      <label class="mode-option">
+        <input
+          type="radio"
+          name="editMode"
+          value="inplace"
+          [ngModel]="mode"
+          (ngModelChange)="modeChange.emit($event)"
+        />
+        <span>Replace in this chat (delete all following messages)</span>
+      </label>
+      <label class="mode-option">
+        <input
+          type="radio"
+          name="editMode"
+          value="fork"
+          [ngModel]="mode"
+          (ngModelChange)="modeChange.emit($event)"
+        />
+        <span>Fork chat here and apply edit in the fork</span>
+      </label>
+    </div>
+  </article>
+
+  <div class="actions">
+    <button class="primary" (click)="apply.emit()">Apply</button>
+    <button class="secondary" (click)="close.emit()">Cancel</button>
+  </div>
+</section>

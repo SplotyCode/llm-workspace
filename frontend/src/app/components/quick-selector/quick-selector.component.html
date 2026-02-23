@@ -1,0 +1,20 @@
+<section class="quick-select">
+  <div class="row-head">
+    <h2>Quick Selector</h2>
+    <span class="muted">{{ selectedTargetIds.size }} selected</span>
+  </div>
+  <div class="chips">
+    <button
+      type="button"
+      class="chip"
+      *ngFor="let target of targets"
+      [class.selected]="isSelected(target.id)"
+      [class.openrouter]="target.provider === 'openrouter'"
+      [class.ollama]="target.provider === 'ollama'"
+      (click)="toggle.emit(target.id)"
+    >
+      <span class="provider-icon" [attr.aria-label]="target.provider">{{ providerIcon(target.provider) }}</span>
+      <span>{{ target.model }}</span>
+    </button>
+  </div>
+</section>

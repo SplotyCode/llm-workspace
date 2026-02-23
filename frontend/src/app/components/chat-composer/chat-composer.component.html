@@ -1,0 +1,20 @@
+<section class="composer">
+  <textarea
+    [ngModel]="prompt"
+    (ngModelChange)="onPromptInput($event)"
+    rows="4"
+    placeholder="Ask your question."
+  ></textarea>
+  <div class="actions">
+    <button class="primary" (click)="submit.emit()" [disabled]="isStreaming">{{ isStreaming ? 'Streaming...' : 'Send' }}</button>
+    <button class="secondary" (click)="cancel.emit()" [disabled]="!isStreaming">Stop</button>
+    <app-context-indicator
+      *ngIf="selectedTargetsSize > 0"
+      [isLoading]="isContextLoading"
+      [minItem]="minContextItem"
+      [items]="contextItems"
+      [error]="contextLoadError"
+    ></app-context-indicator>
+  </div>
+  <p class="error" *ngIf="error">{{ error }}</p>
+</section>

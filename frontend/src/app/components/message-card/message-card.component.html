@@ -1,0 +1,55 @@
+<article class="msg" [class.user]="message.role === 'user'" [class.assistant]="message.role === 'assistant'">
+  <div class="msg-meta">
+    <strong>{{ roleLabel }}</strong>
+    <span *ngIf="showProvider && message.provider && message.model">{{ message.provider }} · {{ message.model }}</span>
+    <span class="summary-badge" *ngIf="showSummaryBadge && message.isSummary">Summary</span>
+    <div class="msg-actions">
+      <span
+        class="status"
+        *ngIf="message.status"
+        [class.streaming]="message.status === 'streaming'"
+        [class.done]="message.status === 'done'"
+        [class.error]="message.status === 'error'"
+      >
+        {{ message.status }}
+      </span>
+      <div class="msg-history-nav" *ngIf="canMoveHistory">
+        <button type="button" class="history-btn" [disabled]="historyAtStart" (click)="moveHistory.emit(-1)">&lt;</button>
+        <span class="history-pos">{{ historyPosition }}</span>
+        <button type="button" class="history-btn" [disabled]="historyAtEnd" (click)="moveHistory.emit(1)">&gt;</button>
+      </div>
+      <div class="include-wrap" (click)="$event.stopPropagation()">
+        <button
+          type="button"
+          class="include-current"
+          (click)="toggleInclusion.emit($event)"
+          [attr.title]="inclusionOptionTitle(inclusionValue)"
+        >
+          {{ inclusionDisplayLabel }}
+        </button>
+        <div class="include-control" *ngIf="inclusionMenuOpen" role="group" aria-label="Message context policy">
+          <button
+            type="button"
+            class="include-option"
+            *ngFor="let option of inclusionOptions"
+            [class.active]="inclusionValue === option.value"
+            (click)="selectInclusion.emit(option.value)"
+            [attr.title]="inclusionOptionTitle(option.value)"
+          >
+            {{ option.label }}
+          </button>
+        </div>
+      </div>
+      <div class="msg-menu-wrap" (click)="$event.stopPropagation()">
+        <button type="button" class="msg-menu-btn" aria-label="Message actions" (click)="toggleMenu.emit($event)">⋯</button>
+        <div class="msg-menu" *ngIf="messageMenuOpen">
+          <button type="button" (click)="regenerate.emit()">Regenerate</button>
+          <button type="button" (click)="fork.emit()">Fork chat from here</button>
+          <button type="button" *ngIf="showEditAction" (click)="edit.emit()">Edit message</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <pre>{{ message.content || 'Waiting for first token...' }}</pre>
+  <p class="error" *ngIf="message.error">{{ message.error }}</p>
+</article>

@@ -72,169 +72,60 @@
     </aside>
 
     <section class="main panel">
-      <section class="quick-select">
-        <div class="row-head">
-          <h2>Quick Selector</h2>
-          <span class="muted">{{ selectedTargets.size }} selected</span>
-        </div>
-        <div class="chips">
-          <button
-            type="button"
-            class="chip"
-            *ngFor="let target of quickTargets; trackBy: trackById"
-            [class.selected]="isTargetSelected(target.id)"
-            [class.openrouter]="target.provider === 'openrouter'"
-            [class.ollama]="target.provider === 'ollama'"
-            (click)="toggleTarget(target.id)"
-          >
-            <span class="provider-icon" [attr.aria-label]="target.provider">{{ providerIcon(target.provider) }}</span>
-            <span>{{ target.model }}</span>
-          </button>
-        </div>
-      </section>
+      <app-quick-selector [targets]="quickTargets" [selectedTargetIds]="selectedTargets" (toggle)="toggleTarget($event)"></app-quick-selector>
 
       <section class="history" *ngIf="selectedChat; else noChat">
         <div class="message-group" *ngFor="let group of messageGroups; trackBy: trackByGroup">
-          <article class="msg user">
-            <div class="msg-meta">
-              <strong>user</strong>
-              <div class="msg-actions">
-                <div class="msg-history-nav" *ngIf="canMoveMessageHistory(group.user)">
-                  <button
-                    type="button"
-                    class="history-btn"
-                    [disabled]="(group.user.historyIndex ?? ((group.user.history?.length ?? 1) - 1)) <= 0"
-                    (click)="moveMessageHistory(group.user, -1)"
-                    title="Show previous user version"
-                  >
-                    &lt;
-                  </button>
-                  <span class="history-pos">{{ messageHistoryPosition(group.user) }}</span>
-                  <button
-                    type="button"
-                    class="history-btn"
-                    [disabled]="(group.user.historyIndex ?? ((group.user.history?.length ?? 1) - 1)) >= ((group.user.history?.length ?? 1) - 1)"
-                    (click)="moveMessageHistory(group.user, 1)"
-                    title="Show newer user version"
-                  >
-                    &gt;
-                  </button>
-                </div>
-                <div class="include-wrap" (click)="$event.stopPropagation()">
-                  <button
-                    type="button"
-                    class="include-current"
-                    (click)="toggleInclusionMenu(group.user.id, $event)"
-                    [attr.title]="inclusionOptionTitle(messageInclusionValue(group.user))"
-                  >
-                    {{ inclusionDisplayLabel(group.user) }}
-                  </button>
-                  <div class="include-control" *ngIf="openInclusionMessageId === group.user.id" role="group" aria-label="Message context policy">
-                    <button
-                      type="button"
-                      class="include-option"
-                      *ngFor="let option of messageInclusionOptions(group.user)"
-                      [class.active]="messageInclusionValue(group.user) === option.value"
-                      (click)="onMessageInclusionChange(group.user, option.value); closeInclusionMenu()"
-                      [attr.title]="inclusionOptionTitle(option.value)"
-                    >
-                      {{ option.label }}
-                    </button>
-                  </div>
-                </div>
-                <div class="msg-menu-wrap" (click)="$event.stopPropagation()">
-                  <button
-                    type="button"
-                    class="msg-menu-btn"
-                    aria-label="Message actions"
-                    (click)="toggleMessageMenu(group.user.id, $event)"
-                  >
-                    ⋯
-                  </button>
-                  <div class="msg-menu" *ngIf="openMessageMenuId === group.user.id">
-                    <button type="button" (click)="regenerateFromMessage(group.user)">Regenerate</button>
-                    <button type="button" (click)="forkFromMessage(group.user)">Fork chat from here</button>
-                    <button type="button" (click)="openEditUserMessage(group.user)">Edit message</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <pre>{{ group.user.content || 'Waiting for first token...' }}</pre>
-            <p class="error" *ngIf="group.user.error">{{ group.user.error }}</p>
-          </article>
+          <app-message-card
+            [message]="group.user"
+            roleLabel="user"
+            [showProvider]="false"
+            [showSummaryBadge]="false"
+            [showEditAction]="true"
+            [canMoveHistory]="canMoveMessageHistory(group.user)"
+            [historyPosition]="messageHistoryPosition(group.user)"
+            [historyAtStart]="(group.user.historyIndex ?? ((group.user.history?.length ?? 1) - 1)) <= 0"
+            [historyAtEnd]="(group.user.historyIndex ?? ((group.user.history?.length ?? 1) - 1)) >= ((group.user.history?.length ?? 1) - 1)"
+            [inclusionMenuOpen]="openInclusionMessageId === group.user.id"
+            [messageMenuOpen]="openMessageMenuId === group.user.id"
+            [inclusionValue]="messageInclusionValue(group.user)"
+            [inclusionDisplayLabel]="inclusionDisplayLabel(group.user)"
+            [inclusionOptions]="messageInclusionOptions(group.user)"
+            [inclusionOptionTitle]="inclusionOptionTitle"
+            (moveHistory)="moveMessageHistory(group.user, $event)"
+            (toggleInclusion)="toggleInclusionMenu(group.user.id, $event)"
+            (selectInclusion)="onMessageInclusionChange(group.user, $event); closeInclusionMenu()"
+            (toggleMenu)="toggleMessageMenu(group.user.id, $event)"
+            (regenerate)="regenerateFromMessage(group.user)"
+            (fork)="forkFromMessage(group.user)"
+            (edit)="openEditUserMessage(group.user)"
+          ></app-message-card>
 
           <div class="assistant-stack">
-            <article class="msg assistant" *ngFor="let msg of group.assistants; trackBy: trackById">
-              <div class="msg-meta">
-                <strong>assistant</strong>
-                <span *ngIf="msg.provider && msg.model">{{ msg.provider }} · {{ msg.model }}</span>
-                <span class="summary-badge" *ngIf="msg.isSummary">Summary</span>
-                <div class="msg-actions">
-                  <span class="status" *ngIf="msg.status" [class.streaming]="msg.status === 'streaming'" [class.done]="msg.status === 'done'" [class.error]="msg.status === 'error'">
-                    {{ msg.status }}
-                  </span>
-                  <div class="msg-history-nav" *ngIf="canMoveMessageHistory(msg)">
-                    <button
-                      type="button"
-                      class="history-btn"
-                      [disabled]="(msg.historyIndex ?? ((msg.history?.length ?? 1) - 1)) <= 0"
-                      (click)="moveMessageHistory(msg, -1)"
-                      title="Show previous assistant version"
-                    >
-                      &lt;
-                    </button>
-                    <span class="history-pos">{{ messageHistoryPosition(msg) }}</span>
-                    <button
-                      type="button"
-                      class="history-btn"
-                      [disabled]="(msg.historyIndex ?? ((msg.history?.length ?? 1) - 1)) >= ((msg.history?.length ?? 1) - 1)"
-                      (click)="moveMessageHistory(msg, 1)"
-                      title="Show newer assistant version"
-                    >
-                      &gt;
-                    </button>
-                  </div>
-                  <div class="include-wrap" (click)="$event.stopPropagation()">
-                    <button
-                      type="button"
-                      class="include-current"
-                      (click)="toggleInclusionMenu(msg.id, $event)"
-                      [attr.title]="inclusionOptionTitle(messageInclusionValue(msg))"
-                    >
-                      {{ inclusionDisplayLabel(msg) }}
-                    </button>
-                    <div class="include-control" *ngIf="openInclusionMessageId === msg.id" role="group" aria-label="Message context policy">
-                      <button
-                        type="button"
-                        class="include-option"
-                        *ngFor="let option of messageInclusionOptions(msg)"
-                        [class.active]="messageInclusionValue(msg) === option.value"
-                        (click)="onMessageInclusionChange(msg, option.value); closeInclusionMenu()"
-                        [attr.title]="inclusionOptionTitle(option.value)"
-                      >
-                        {{ option.label }}
-                      </button>
-                    </div>
-                  </div>
-                  <div class="msg-menu-wrap" (click)="$event.stopPropagation()">
-                    <button
-                      type="button"
-                      class="msg-menu-btn"
-                      aria-label="Message actions"
-                      (click)="toggleMessageMenu(msg.id, $event)"
-                    >
-                      ⋯
-                    </button>
-                    <div class="msg-menu" *ngIf="openMessageMenuId === msg.id">
-                      <button type="button" (click)="regenerateFromMessage(msg)">Regenerate</button>
-                      <button type="button" (click)="forkFromMessage(msg)">Fork chat from here</button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <pre>{{ msg.content || 'Waiting for first token...' }}</pre>
-              <p class="error" *ngIf="msg.error">{{ msg.error }}</p>
-            </article>
+            <app-message-card
+              *ngFor="let msg of group.assistants; trackBy: trackById"
+              [message]="msg"
+              roleLabel="assistant"
+              [showProvider]="true"
+              [showSummaryBadge]="true"
+              [showEditAction]="false"
+              [canMoveHistory]="canMoveMessageHistory(msg)"
+              [historyPosition]="messageHistoryPosition(msg)"
+              [historyAtStart]="(msg.historyIndex ?? ((msg.history?.length ?? 1) - 1)) <= 0"
+              [historyAtEnd]="(msg.historyIndex ?? ((msg.history?.length ?? 1) - 1)) >= ((msg.history?.length ?? 1) - 1)"
+              [inclusionMenuOpen]="openInclusionMessageId === msg.id"
+              [messageMenuOpen]="openMessageMenuId === msg.id"
+              [inclusionValue]="messageInclusionValue(msg)"
+              [inclusionDisplayLabel]="inclusionDisplayLabel(msg)"
+              [inclusionOptions]="messageInclusionOptions(msg)"
+              [inclusionOptionTitle]="inclusionOptionTitle"
+              (moveHistory)="moveMessageHistory(msg, $event)"
+              (toggleInclusion)="toggleInclusionMenu(msg.id, $event)"
+              (selectInclusion)="onMessageInclusionChange(msg, $event); closeInclusionMenu()"
+              (toggleMenu)="toggleMessageMenu(msg.id, $event)"
+              (regenerate)="regenerateFromMessage(msg)"
+              (fork)="forkFromMessage(msg)"
+            ></app-message-card>
           </div>
 
           <div class="group-summary">
@@ -259,145 +150,53 @@
         <p class="muted">Create or select a chat to start.</p>
       </ng-template>
 
-      <section class="composer">
-        <textarea
-          [(ngModel)]="prompt"
-          (ngModelChange)="onPromptChanged()"
-          rows="4"
-          placeholder="Ask your question."
-        ></textarea>
-        <div class="actions">
-          <button class="primary" (click)="submit()" [disabled]="isStreaming">{{ isStreaming ? 'Streaming...' : 'Send' }}</button>
-          <button class="secondary" (click)="cancel()" [disabled]="!isStreaming">Stop</button>
-          <div class="context-indicator" *ngIf="selectedTargets.size > 0">
-            <span class="context-pill" [class.loading]="isContextLoading">
-              <ng-container *ngIf="minContextItem; else noContextData">
-                Ctx used: {{ minContextItem.usedPercent }}%
-              </ng-container>
-              <ng-template #noContextData>
-                {{ isContextLoading ? 'Ctx used: loading...' : 'Ctx used: n/a' }}
-              </ng-template>
-            </span>
-            <div class="context-popover">
-              <div class="context-popover-title">Context windows</div>
-              <div class="context-row" *ngFor="let item of contextIndicatorItems; trackBy: trackByTargetId">
-                <span>{{ item.provider }} · {{ item.model }}</span>
-                <strong *ngIf="item.usedPercent != null && !item.error">{{ item.usedPercent }}% ({{ item.estimatedTokens }}/{{ item.maxContextTokens }})</strong>
-                <strong *ngIf="item.usedPercent == null || item.error">n/a</strong>
-              </div>
-              <div class="context-row context-error" *ngIf="contextLoadError">{{ contextLoadError }}</div>
-            </div>
-          </div>
-        </div>
-        <p class="error" *ngIf="error">{{ error }}</p>
-      </section>
+      <app-chat-composer
+        [prompt]="prompt"
+        [isStreaming]="isStreaming"
+        [error]="error"
+        [selectedTargetsSize]="selectedTargets.size"
+        [isContextLoading]="isContextLoading"
+        [minContextItem]="minContextItem"
+        [contextItems]="contextIndicatorItems"
+        [contextLoadError]="contextLoadError"
+        (promptChange)="prompt = $event"
+        (promptChanged)="onPromptChanged()"
+        (submit)="submit()"
+        (cancel)="cancel()"
+      ></app-chat-composer>
     </section>
   </main>
 </div>
 
-<div class="modal-backdrop" *ngIf="showSettings" (click)="closeSettings()"></div>
-<section class="modal" *ngIf="showSettings" role="dialog" aria-modal="true">
-  <div class="row-head">
-    <h2>LLM Configuration</h2>
-    <button class="secondary" (click)="closeSettings()">Close</button>
-  </div>
+<app-llm-settings-modal
+  [show]="showSettings"
+  [config]="config"
+  [openRouterModelsInput]="modelsToInput(config.openrouter.models)"
+  [ollamaModelsInput]="modelsToInput(config.ollama.models)"
+  (close)="closeSettings()"
+  (save)="saveSettings()"
+  (openRouterModelsInputChange)="updateOpenRouterModels($event)"
+  (ollamaModelsInputChange)="updateOllamaModels($event)"
+></app-llm-settings-modal>
 
-  <article class="config-block">
-    <h3>OpenRouter</h3>
-    <label>
-      API Key
-      <input type="password" [(ngModel)]="config.openrouter.apiKey" placeholder="sk-or-v1-..." />
-    </label>
-    <label>
-      Base URL
-      <input type="text" [(ngModel)]="config.openrouter.baseUrl" placeholder="https://openrouter.ai/api/v1" />
-    </label>
-    <label>
-      Models (comma-separated)
-      <input
-        type="text"
-        [ngModel]="modelsToInput(config.openrouter.models)"
-        (ngModelChange)="updateOpenRouterModels($event)"
-      />
-    </label>
-  </article>
+<app-edit-user-message-modal
+  [show]="showEditMessageModal"
+  [content]="editingUserMessageContent"
+  [mode]="editingUserMessageMode"
+  (close)="closeEditUserMessageModal()"
+  (apply)="saveEditUserMessage()"
+  (contentChange)="editingUserMessageContent = $event"
+  (modeChange)="editingUserMessageMode = $event"
+></app-edit-user-message-modal>
 
-  <article class="config-block">
-    <h3>Ollama</h3>
-    <label>
-      Base URL
-      <input type="text" [(ngModel)]="config.ollama.baseUrl" placeholder="http://localhost:11434" />
-    </label>
-    <label>
-      Models (comma-separated)
-      <input
-        type="text"
-        [ngModel]="modelsToInput(config.ollama.models)"
-        (ngModelChange)="updateOllamaModels($event)"
-      />
-    </label>
-  </article>
-
-  <div class="actions">
-    <button class="primary" (click)="saveSettings()">Save</button>
-    <button class="secondary" (click)="closeSettings()">Cancel</button>
-  </div>
-</section>
-
-<div class="modal-backdrop" *ngIf="showEditMessageModal" (click)="closeEditUserMessageModal()"></div>
-<section class="modal" *ngIf="showEditMessageModal" role="dialog" aria-modal="true">
-  <div class="row-head">
-    <h2>Edit User Message</h2>
-    <button class="secondary" (click)="closeEditUserMessageModal()">Close</button>
-  </div>
-
-  <article class="config-block">
-    <label>
-      Message
-      <textarea rows="6" [(ngModel)]="editingUserMessageContent"></textarea>
-    </label>
-    <div class="edit-mode">
-      <label class="mode-option">
-        <input type="radio" name="editMode" value="inplace" [(ngModel)]="editingUserMessageMode" />
-        <span>Replace in this chat (delete all following messages)</span>
-      </label>
-      <label class="mode-option">
-        <input type="radio" name="editMode" value="fork" [(ngModel)]="editingUserMessageMode" />
-        <span>Fork chat here and apply edit in the fork</span>
-      </label>
-    </div>
-  </article>
-
-  <div class="actions">
-    <button class="primary" (click)="saveEditUserMessage()">Apply</button>
-    <button class="secondary" (click)="closeEditUserMessageModal()">Cancel</button>
-  </div>
-</section>
-
-<div class="modal-backdrop" *ngIf="showFolderSettings" (click)="closeFolderSettings()"></div>
-<section class="modal" *ngIf="showFolderSettings" role="dialog" aria-modal="true">
-  <div class="row-head">
-    <h2>Folder Settings</h2>
-    <button class="secondary" (click)="closeFolderSettings()">Close</button>
-  </div>
-
-  <article class="config-block">
-    <label>
-      Folder Name
-      <input type="text" [(ngModel)]="folderSettingsName" />
-    </label>
-    <label>
-      System Prompt
-      <textarea rows="6" [(ngModel)]="folderSettingsPrompt" placeholder="Applied to all chats in this folder"></textarea>
-    </label>
-    <label>
-      Temperature (0-2, optional)
-      <input type="text" [(ngModel)]="folderSettingsTemperature" placeholder="e.g. 0.7" />
-    </label>
-  </article>
-
-  <div class="actions">
-    <button class="primary" (click)="saveFolderSettings()">Save</button>
-    <button class="secondary" (click)="closeFolderSettings()">Cancel</button>
-  </div>
-</section>
+<app-folder-settings-modal
+  [show]="showFolderSettings"
+  [name]="folderSettingsName"
+  [prompt]="folderSettingsPrompt"
+  [temperature]="folderSettingsTemperature"
+  (close)="closeFolderSettings()"
+  (save)="saveFolderSettings()"
+  (nameChange)="folderSettingsName = $event"
+  (promptChange)="folderSettingsPrompt = $event"
+  (temperatureChange)="folderSettingsTemperature = $event"
+></app-folder-settings-modal>

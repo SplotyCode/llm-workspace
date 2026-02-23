@@ -1,0 +1,40 @@
+<div class="modal-backdrop" *ngIf="show" (click)="close.emit()"></div>
+<section class="modal" *ngIf="show" role="dialog" aria-modal="true">
+  <div class="row-head">
+    <h2>LLM Configuration</h2>
+    <button class="secondary" (click)="close.emit()">Close</button>
+  </div>
+
+  <article class="config-block">
+    <h3>OpenRouter</h3>
+    <label>
+      API Key
+      <input type="password" [(ngModel)]="config.openrouter.apiKey" placeholder="sk-or-v1-..." />
+    </label>
+    <label>
+      Base URL
+      <input type="text" [(ngModel)]="config.openrouter.baseUrl" placeholder="https://openrouter.ai/api/v1" />
+    </label>
+    <label>
+      Models (comma-separated)
+      <input type="text" [ngModel]="openRouterModelsInput" (ngModelChange)="openRouterModelsInputChange.emit($event)" />
+    </label>
+  </article>
+
+  <article class="config-block">
+    <h3>Ollama</h3>
+    <label>
+      Base URL
+      <input type="text" [(ngModel)]="config.ollama.baseUrl" placeholder="http://localhost:11434" />
+    </label>
+    <label>
+      Models (comma-separated)
+      <input type="text" [ngModel]="ollamaModelsInput" (ngModelChange)="ollamaModelsInputChange.emit($event)" />
+    </label>
+  </article>
+
+  <div class="actions">
+    <button class="primary" (click)="save.emit()">Save</button>
+    <button class="secondary" (click)="close.emit()">Cancel</button>
+  </div>
+</section>

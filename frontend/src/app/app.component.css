@@ -1,4 +1,4 @@
-:host {
+app-root {
   --bg: #f3f8f6;
   --panel: #ffffff;
   --text: #102127;
@@ -15,6 +15,16 @@
     radial-gradient(circle at 10% 0%, #d7f0ea 0%, transparent 36%),
     radial-gradient(circle at 90% 100%, #dfe8ff 0%, transparent 32%),
     var(--bg);
+}
+
+app-quick-selector,
+app-message-card,
+app-context-indicator,
+app-chat-composer,
+app-llm-settings-modal,
+app-edit-user-message-modal,
+app-folder-settings-modal {
+  display: block;
 }
 
 .page {
