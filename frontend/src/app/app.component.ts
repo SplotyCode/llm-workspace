@@ -4,6 +4,11 @@ import { FormsModule } from '@angular/forms';
 import { ChatDetail, ChatRequest, ChatSummary, Folder, Message, ProviderRuntimeConfig, StreamEvent } from './models/chat.models';
 import { ChatService } from './services/chat.service';
 
+interface MessageGroup {
+  user: Message;
+  assistants: Message[];
+}
+
 @Component({
   selector: 'app-root',
   standalone: true,
@@ -60,6 +65,14 @@ export class AppComponent implements OnInit {
   dropFolderId = '';
   editingChatId = '';
   editingChatTitle = '';
+  summaryTargetByUser = new Map<string, string>();
+  pendingSummaries = new Set<string>();
+  private isSummaryStream = false;
+  private quickTargetsCache: Array<{ id: string; provider: string; model: string }> = [];
+  private quickTargetsKey = '';
+  private messageGroupsCache: MessageGroup[] = [];
+  private messageGroupsMessagesRef: Message[] | null = null;
+  private messageGroupsChatId = '';
 
   constructor(private readonly chatService: ChatService) {}
 
@@ -73,10 +86,60 @@ export class AppComponent implements OnInit {
   }
 
   get quickTargets(): Array<{ id: string; provider: string; model: string }> {
-    return [
+    const key = `${this.config.openrouter.models.join('\u0001')}::${this.config.ollama.models.join('\u0001')}`;
+    if (key === this.quickTargetsKey) {
+      return this.quickTargetsCache;
+    }
+    this.quickTargetsKey = key;
+    this.quickTargetsCache = [
       ...this.config.openrouter.models.map((model) => ({ id: `openrouter:${model}`, provider: 'openrouter', model })),
       ...this.config.ollama.models.map((model) => ({ id: `ollama:${model}`, provider: 'ollama', model }))
     ];
+    return this.quickTargetsCache;
+  }
+
+  get summaryModelOptions(): Array<{ id: string; provider: string; model: string }> {
+    return this.quickTargets;
+  }
+
+  get messageGroups(): MessageGroup[] {
+    if (!this.selectedChat) {
+      this.messageGroupsCache = [];
+      this.messageGroupsMessagesRef = null;
+      this.messageGroupsChatId = '';
+      return this.messageGroupsCache;
+    }
+    if (
+      this.messageGroupsChatId === this.selectedChat.id &&
+      this.messageGroupsMessagesRef === this.selectedChat.messages
+    ) {
+      return this.messageGroupsCache;
+    }
+
+    const groups: MessageGroup[] = [];
+    let current: MessageGroup | null = null;
+    for (const msg of this.selectedChat.messages) {
+      if (msg.role === 'user') {
+        current = { user: msg, assistants: [] };
+        groups.push(current);
+        continue;
+      }
+      if (msg.role === 'assistant' && current) {
+        current.assistants.push(msg);
+      }
+    }
+    this.messageGroupsCache = groups;
+    this.messageGroupsMessagesRef = this.selectedChat.messages;
+    this.messageGroupsChatId = this.selectedChat.id;
+    return this.messageGroupsCache;
+  }
+
+  trackById(_index: number, item: { id: string }): string {
+    return item.id;
+  }
+
+  trackByGroup(_index: number, group: MessageGroup): string {
+    return group.user.id;
   }
 
   providerIcon(provider: string): string {
@@ -262,6 +325,7 @@ export class AppComponent implements OnInit {
     const userPrompt = this.prompt.trim();
     this.prompt = '';
     this.isStreaming = true;
+    this.isSummaryStream = false;
     this.liveAssistantIndexByTarget.clear();
     this.regeneratingUserReplaceByTarget.clear();
     this.abortController = new AbortController();
@@ -299,12 +363,15 @@ export class AppComponent implements OnInit {
           onError: (err) => {
             this.error = err.message;
             this.isStreaming = false;
+            this.isSummaryStream = false;
             this.regeneratingUserReplaceByTarget.clear();
+            void this.processPendingSummaries();
           },
           onComplete: () => {
             this.isStreaming = false;
+            this.isSummaryStream = false;
             this.regeneratingUserReplaceByTarget.clear();
-            void this.refreshAfterStream();
+            void this.refreshAfterStream().then(() => this.processPendingSummaries());
           }
         },
         this.abortController.signal
@@ -312,13 +379,16 @@ export class AppComponent implements OnInit {
     } catch (err) {
       this.error = (err as Error).message;
       this.isStreaming = false;
+      this.isSummaryStream = false;
       this.regeneratingUserReplaceByTarget.clear();
+      void this.processPendingSummaries();
     }
   }
 
   cancel(): void {
     this.abortController?.abort();
     this.isStreaming = false;
+    this.isSummaryStream = false;
     this.regeneratingMessageId = '';
     this.regeneratingUserReplaceByTarget.clear();
   }
@@ -514,6 +584,7 @@ export class AppComponent implements OnInit {
 
     this.closeMessageMenu();
     this.isStreaming = true;
+    this.isSummaryStream = false;
     this.liveAssistantIndexByTarget.clear();
     this.abortController = new AbortController();
 
@@ -523,29 +594,21 @@ export class AppComponent implements OnInit {
         message.id,
         {
           targets,
-          config: {
-            openrouter: {
-              apiKey: this.config.openrouter.apiKey.trim(),
-              baseUrl: this.config.openrouter.baseUrl.trim(),
-              models: this.config.openrouter.models
-            },
-            ollama: {
-              baseUrl: this.config.ollama.baseUrl.trim(),
-              models: this.config.ollama.models
-            }
-          }
+          config: this.runtimeConfig()
         },
         {
           onEvent: (event) => this.handleEvent(event),
           onError: (err) => {
             this.error = err.message;
             this.isStreaming = false;
+            this.isSummaryStream = false;
           },
           onComplete: () => {
             this.isStreaming = false;
+            this.isSummaryStream = false;
             this.regeneratingMessageId = '';
             this.regeneratingUserReplaceByTarget.clear();
-            void this.refreshAfterStream();
+            void this.refreshAfterStream().then(() => this.processPendingSummaries());
           }
         },
         this.abortController.signal
@@ -553,6 +616,7 @@ export class AppComponent implements OnInit {
     } catch (err) {
       this.error = (err as Error).message;
       this.isStreaming = false;
+      this.isSummaryStream = false;
       this.regeneratingMessageId = '';
       this.regeneratingUserReplaceByTarget.clear();
     }
@@ -560,6 +624,29 @@ export class AppComponent implements OnInit {
 
   canMoveMessageHistory(message: Message): boolean {
     return (message.history?.length ?? 0) > 1;
+  }
+
+  summaryTargetId(userMessageId: string): string {
+    return this.summaryTargetByUser.get(userMessageId) ?? this.summaryModelOptions[0]?.id ?? '';
+  }
+
+  setSummaryTargetId(userMessageId: string, targetId: string): void {
+    this.summaryTargetByUser.set(userMessageId, targetId);
+  }
+
+  isSummaryPending(userMessageId: string): boolean {
+    return this.pendingSummaries.has(userMessageId);
+  }
+
+  async requestSummarize(userMessageId: string): Promise<void> {
+    this.closeMessageMenu();
+    this.closeInclusionMenu();
+
+    if (this.isStreaming || this.groupHasStreaming(userMessageId)) {
+      this.pendingSummaries.add(userMessageId);
+      return;
+    }
+    await this.runSummarize(userMessageId);
   }
 
   messageHistoryPosition(message: Message): string {
@@ -676,6 +763,67 @@ export class AppComponent implements OnInit {
     await this.reloadChats(this.selectedChatId);
   }
 
+  private async processPendingSummaries(): Promise<void> {
+    if (this.isStreaming || this.pendingSummaries.size === 0) {
+      return;
+    }
+    const pending = [...this.pendingSummaries];
+    for (const userId of pending) {
+      if (this.isStreaming) {
+        return;
+      }
+      if (this.groupHasStreaming(userId)) {
+        continue;
+      }
+      this.pendingSummaries.delete(userId);
+      await this.runSummarize(userId);
+    }
+  }
+
+  private async runSummarize(userMessageId: string): Promise<void> {
+    if (!this.selectedChatId) {
+      return;
+    }
+    const targetId = this.summaryTargetId(userMessageId);
+    const target = this.summaryModelOptions.find((t) => t.id === targetId);
+    if (!target) {
+      this.error = 'Choose a valid summary model.';
+      return;
+    }
+
+    this.isStreaming = true;
+    this.isSummaryStream = true;
+    this.liveAssistantIndexByTarget.clear();
+    this.abortController = new AbortController();
+
+    try {
+      await this.chatService.summarizeFromUserMessage(
+        this.selectedChatId,
+        userMessageId,
+        { provider: target.provider, model: target.model },
+        this.runtimeConfig(),
+        {
+          onEvent: (event) => this.handleEvent(event),
+          onError: (err) => {
+            this.error = err.message;
+            this.isStreaming = false;
+            this.isSummaryStream = false;
+          },
+          onComplete: () => {
+            this.isStreaming = false;
+            this.isSummaryStream = false;
+            void this.refreshAfterStream().then(() => this.processPendingSummaries());
+          }
+        },
+        this.abortController.signal
+      );
+    } catch (err) {
+      this.error = (err as Error).message;
+      this.isStreaming = false;
+      this.isSummaryStream = false;
+    }
+  }
+
   private cleanupSelectedTargets(): void {
     const valid = new Set(this.quickTargets.map((t) => t.id));
     this.selectedTargets.forEach((id) => {
@@ -714,6 +862,9 @@ export class AppComponent implements OnInit {
       if (msg.role !== 'assistant') {
         continue;
       }
+      if (msg.isSummary) {
+        continue;
+      }
       const targetId = (msg.targetId ?? '').trim();
       if (!targetId) {
         continue;
@@ -724,9 +875,32 @@ export class AppComponent implements OnInit {
     return map;
   }
 
+  private groupHasStreaming(userMessageId: string): boolean {
+    const group = this.messageGroups.find((g) => g.user.id === userMessageId);
+    if (!group) {
+      return false;
+    }
+    return group.assistants.some((m) => m.status === 'streaming');
+  }
+
+  private runtimeConfig(): ChatRequest['config'] {
+    return {
+      openrouter: {
+        apiKey: this.config.openrouter.apiKey.trim(),
+        baseUrl: this.config.openrouter.baseUrl.trim(),
+        models: this.config.openrouter.models
+      },
+      ollama: {
+        baseUrl: this.config.ollama.baseUrl.trim(),
+        models: this.config.ollama.models
+      }
+    };
+  }
+
   private handleEvent(event: StreamEvent): void {
     if (event.event === 'done') {
       this.isStreaming = false;
+      this.isSummaryStream = false;
       return;
     }
 
@@ -742,8 +916,13 @@ export class AppComponent implements OnInit {
           existing.provider = event.provider;
           existing.model = event.model;
           existing.targetId = event.targetId;
-          existing.inclusion = 'model_only';
-          existing.scopeId = event.targetId;
+          if (existing.isSummary) {
+            existing.inclusion = 'always';
+            existing.scopeId = '';
+          } else {
+            existing.inclusion = 'model_only';
+            existing.scopeId = event.targetId;
+          }
           existing.status = 'streaming';
           existing.error = '';
           existing.content = '';
@@ -778,8 +957,9 @@ export class AppComponent implements OnInit {
         provider: event.provider,
         model: event.model,
         targetId: event.targetId,
-        inclusion: 'model_only',
-        scopeId: event.targetId,
+        isSummary: this.isSummaryStream,
+        inclusion: this.isSummaryStream ? 'always' : 'model_only',
+        scopeId: this.isSummaryStream ? '' : event.targetId,
         status: 'streaming',
         createdAt: new Date().toISOString()
       };

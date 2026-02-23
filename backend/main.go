@@ -24,14 +24,14 @@ type chatRequest struct {
 }
 
 type createFolderRequest struct {
-	Name         string `json:"name"`
-	SystemPrompt string `json:"systemPrompt"`
+	Name         string   `json:"name"`
+	SystemPrompt string   `json:"systemPrompt"`
 	Temperature  *float64 `json:"temperature,omitempty"`
 }
 
 type updateFolderRequest struct {
-	Name         string `json:"name"`
-	SystemPrompt string `json:"systemPrompt"`
+	Name         string   `json:"name"`
+	SystemPrompt string   `json:"systemPrompt"`
 	Temperature  *float64 `json:"temperature,omitempty"`
 }
 
@@ -67,6 +67,12 @@ type editMessageRequest struct {
 
 type setHistoryIndexRequest struct {
 	Index int `json:"index"`
+}
+
+type summarizeRequest struct {
+	UserMessageID string                   `json:"userMessageId"`
+	Target        providers.Target         `json:"target"`
+	Config        providers.ProviderConfig `json:"config"`
 }
 
 type providerInfo struct {
@@ -125,7 +131,7 @@ func main() {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 				return
 			}
-				folder, err := store.CreateFolder(req.Name, req.SystemPrompt, req.Temperature)
+			folder, err := store.CreateFolder(req.Name, req.SystemPrompt, req.Temperature)
 			if err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 				return
@@ -153,7 +159,7 @@ func main() {
 			return
 		}
 
-			folder, err := store.UpdateFolder(id, req.Name, req.SystemPrompt, req.Temperature)
+		folder, err := store.UpdateFolder(id, req.Name, req.SystemPrompt, req.Temperature)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
@@ -300,7 +306,7 @@ func main() {
 					t := *folder.Temperature
 					target.Temperature = &t
 				}
-				runStreaming(w, r, registry, parts[0], prompt, []providers.Target{target}, effectiveConfig, history, store, map[string]string{target.Provider + ":" + target.Model: req.MessageID})
+				runStreaming(w, r, registry, parts[0], prompt, []providers.Target{target}, effectiveConfig, history, store, map[string]string{target.Provider + ":" + target.Model: req.MessageID}, false)
 				return
 			}
 
@@ -331,7 +337,65 @@ func main() {
 				}
 			}
 
-			runStreaming(w, r, registry, parts[0], prompt, req.Targets, effectiveConfig, history, store, replaceByTarget)
+			runStreaming(w, r, registry, parts[0], prompt, req.Targets, effectiveConfig, history, store, replaceByTarget, false)
+			return
+		}
+
+		if len(parts) == 2 && parts[1] == "summarize" {
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			var req summarizeRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+				return
+			}
+			req.UserMessageID = strings.TrimSpace(req.UserMessageID)
+			req.Target.Provider = strings.ToLower(strings.TrimSpace(req.Target.Provider))
+			req.Target.Model = strings.TrimSpace(req.Target.Model)
+			if req.UserMessageID == "" {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "userMessageId is required"})
+				return
+			}
+			if req.Target.Provider == "" || req.Target.Model == "" {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "target provider and model are required"})
+				return
+			}
+
+			chat, ok := store.GetChat(parts[0])
+			if !ok {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "chat not found"})
+				return
+			}
+			folder, _ := store.FindFolder(chat.FolderID)
+			effectiveConfig := mergeConfig(store.GetConfig(), req.Config)
+			if strings.TrimSpace(req.Target.SystemPrompt) == "" {
+				req.Target.SystemPrompt = strings.TrimSpace(folder.SystemPrompt)
+			}
+			if req.Target.Temperature == nil && folder.Temperature != nil {
+				t := *folder.Temperature
+				req.Target.Temperature = &t
+			}
+
+			summaryPrompt, err := store.BuildSummaryPrompt(parts[0], req.UserMessageID)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			runStreaming(
+				w,
+				r,
+				registry,
+				parts[0],
+				summaryPrompt,
+				[]providers.Target{req.Target},
+				effectiveConfig,
+				chat.Messages,
+				store,
+				map[string]string{},
+				true,
+			)
 			return
 		}
 
@@ -409,21 +473,21 @@ func main() {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "each target needs provider and model"})
 				return
 			}
-				if strings.TrimSpace(req.Targets[i].SystemPrompt) == "" {
-					req.Targets[i].SystemPrompt = strings.TrimSpace(folder.SystemPrompt)
-				}
-				if req.Targets[i].Temperature == nil && folder.Temperature != nil {
-					t := *folder.Temperature
-					req.Targets[i].Temperature = &t
-				}
+			if strings.TrimSpace(req.Targets[i].SystemPrompt) == "" {
+				req.Targets[i].SystemPrompt = strings.TrimSpace(folder.SystemPrompt)
 			}
+			if req.Targets[i].Temperature == nil && folder.Temperature != nil {
+				t := *folder.Temperature
+				req.Targets[i].Temperature = &t
+			}
+		}
 
-			if err := store.AppendUserPrompt(req.ChatID, req.Prompt); err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-				return
-			}
-			runStreaming(w, r, registry, req.ChatID, req.Prompt, req.Targets, effectiveConfig, chat.Messages, store, map[string]string{})
-		})
+		if err := store.AppendUserPrompt(req.ChatID, req.Prompt); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		runStreaming(w, r, registry, req.ChatID, req.Prompt, req.Targets, effectiveConfig, chat.Messages, store, map[string]string{}, false)
+	})
 
 	server := &http.Server{
 		Addr:              ":8080",
@@ -522,6 +586,7 @@ func runStreaming(
 	baseHistory []state.Message,
 	store *state.Store,
 	replaceByTarget map[string]string,
+	markSummary bool,
 ) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -596,8 +661,14 @@ func runStreaming(
 			out.TargetID = ev.TargetID
 			out.Provider = ev.Provider
 			out.Model = ev.Model
-			out.Inclusion = "model_only"
-			out.ScopeID = ev.TargetID
+			out.IsSummary = markSummary
+			if markSummary {
+				out.Inclusion = "always"
+				out.ScopeID = ""
+			} else {
+				out.Inclusion = "model_only"
+				out.ScopeID = ev.TargetID
+			}
 			out.Content += ev.Content
 			outputs[ev.TargetID] = out
 		}

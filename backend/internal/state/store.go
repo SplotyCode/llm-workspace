@@ -24,17 +24,18 @@ type Folder struct {
 }
 
 type Message struct {
-	ID        string    `json:"id"`
-	Role      string    `json:"role"`
-	Content   string    `json:"content"`
-	Provider  string    `json:"provider,omitempty"`
-	Model     string    `json:"model,omitempty"`
-	TargetID  string    `json:"targetId,omitempty"`
-	Inclusion string    `json:"inclusion,omitempty"`
-	ScopeID   string    `json:"scopeId,omitempty"`
-	History   []MessageVersion `json:"history,omitempty"`
-	HistoryIndex int           `json:"historyIndex,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID           string           `json:"id"`
+	Role         string           `json:"role"`
+	Content      string           `json:"content"`
+	Provider     string           `json:"provider,omitempty"`
+	Model        string           `json:"model,omitempty"`
+	TargetID     string           `json:"targetId,omitempty"`
+	IsSummary    bool             `json:"isSummary,omitempty"`
+	Inclusion    string           `json:"inclusion,omitempty"`
+	ScopeID      string           `json:"scopeId,omitempty"`
+	History      []MessageVersion `json:"history,omitempty"`
+	HistoryIndex int              `json:"historyIndex,omitempty"`
+	CreatedAt    time.Time        `json:"createdAt"`
 }
 
 type MessageVersion struct {
@@ -86,17 +87,17 @@ func (s *Store) load() error {
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			now := time.Now().UTC()
-				s.data = Data{
-					Config: providers.ProviderConfig{
-						OpenRouter: providers.OpenRouterConfig{
-							BaseURL: "https://openrouter.ai/api/v1",
-							Models:  []string{"openai/gpt-4o-mini", "anthropic/claude-3.5-sonnet"},
-						},
-						Ollama: providers.OllamaConfig{
-							BaseURL: "http://localhost:11434",
-							Models:  []string{"llama3.2:latest", "qwen2.5"},
-						},
+			s.data = Data{
+				Config: providers.ProviderConfig{
+					OpenRouter: providers.OpenRouterConfig{
+						BaseURL: "https://openrouter.ai/api/v1",
+						Models:  []string{"openai/gpt-4o-mini", "anthropic/claude-3.5-sonnet"},
 					},
+					Ollama: providers.OllamaConfig{
+						BaseURL: "http://localhost:11434",
+						Models:  []string{"llama3.2:latest", "qwen2.5"},
+					},
+				},
 				Folders: []Folder{{
 					ID:           newID("fld"),
 					Name:         "General",
@@ -139,7 +140,9 @@ func (s *Store) load() error {
 		for j := range s.data.Chats[i].Messages {
 			msg := &s.data.Chats[i].Messages[j]
 			if strings.TrimSpace(msg.Inclusion) == "" {
-				if msg.Role == "assistant" {
+				if msg.Role == "assistant" && msg.IsSummary {
+					msg.Inclusion = "always"
+				} else if msg.Role == "assistant" {
 					msg.Inclusion = "model_only"
 				} else {
 					msg.Inclusion = "always"
@@ -208,12 +211,12 @@ func (s *Store) UpdateFolder(id, name, systemPrompt string, temperature *float64
 		if s.data.Folders[i].ID != id {
 			continue
 		}
-			if strings.TrimSpace(name) != "" {
-				s.data.Folders[i].Name = strings.TrimSpace(name)
-			}
-			s.data.Folders[i].SystemPrompt = systemPrompt
-			s.data.Folders[i].Temperature = temperature
-			s.data.Folders[i].UpdatedAt = time.Now().UTC()
+		if strings.TrimSpace(name) != "" {
+			s.data.Folders[i].Name = strings.TrimSpace(name)
+		}
+		s.data.Folders[i].SystemPrompt = systemPrompt
+		s.data.Folders[i].Temperature = temperature
+		s.data.Folders[i].UpdatedAt = time.Now().UTC()
 		if err := s.persistLocked(); err != nil {
 			return Folder{}, err
 		}
@@ -452,10 +455,81 @@ func (s *Store) PrepareUserRegenerate(chatID, messageID string) (chat Chat, prom
 		if targetID == "" {
 			continue
 		}
+		if msg.IsSummary {
+			continue
+		}
 		replaceByTarget[targetID] = msg.ID
 	}
 
 	return s.data.Chats[chatIdx], prompt, history, replaceByTarget, nil
+}
+
+func (s *Store) BuildSummaryPrompt(chatID, userMessageID string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	chatIdx := -1
+	for i := range s.data.Chats {
+		if s.data.Chats[i].ID == chatID {
+			chatIdx = i
+			break
+		}
+	}
+	if chatIdx < 0 {
+		return "", errors.New("chat not found")
+	}
+
+	userIdx := indexOfMessage(s.data.Chats[chatIdx].Messages, userMessageID)
+	if userIdx < 0 {
+		return "", errors.New("message not found")
+	}
+	userMsg := s.data.Chats[chatIdx].Messages[userIdx]
+	if userMsg.Role != "user" {
+		return "", errors.New("summary source must be a user message")
+	}
+
+	type response struct {
+		header  string
+		content string
+	}
+	responses := make([]response, 0)
+	for i := userIdx + 1; i < len(s.data.Chats[chatIdx].Messages); i++ {
+		msg := s.data.Chats[chatIdx].Messages[i]
+		if msg.Role == "user" {
+			break
+		}
+		if msg.Role != "assistant" || strings.TrimSpace(msg.Content) == "" {
+			continue
+		}
+		header := strings.TrimSpace(msg.Provider)
+		if strings.TrimSpace(msg.Model) != "" {
+			if header != "" {
+				header += " · "
+			}
+			header += strings.TrimSpace(msg.Model)
+		}
+		if header == "" {
+			header = "assistant"
+		}
+		responses = append(responses, response{
+			header:  header,
+			content: msg.Content,
+		})
+	}
+	if len(responses) == 0 {
+		return "", errors.New("no assistant responses available to summarize yet")
+	}
+
+	var b strings.Builder
+	b.WriteString("Create a concise, high-quality synthesis of multiple model responses.\n")
+	b.WriteString("Return: 1) key consensus, 2) key differences, 3) recommended final answer.\n\n")
+	b.WriteString("User question:\n")
+	b.WriteString(userMsg.Content)
+	b.WriteString("\n\nResponses:\n")
+	for i, r := range responses {
+		b.WriteString(fmt.Sprintf("[%d] %s\n%s\n\n", i+1, r.header, r.content))
+	}
+	return b.String(), nil
 }
 
 func (s *Store) PrepareAssistantRegenerate(chatID, messageID string) (chat Chat, prompt string, history []Message, target Message, err error) {
@@ -511,38 +585,44 @@ func (s *Store) ReplaceAssistantMessage(chatID, messageID string, replacement Me
 		if s.data.Chats[i].ID != chatID {
 			continue
 		}
-        for j := range s.data.Chats[i].Messages {
-            if s.data.Chats[i].Messages[j].ID != messageID {
-                continue
-            }
-            orig := s.data.Chats[i].Messages[j]
-            if orig.Role != "assistant" {
-                return errors.New("target message is not assistant")
-            }
-            ensureMessageHistory(&orig)
-            s.data.Chats[i].Messages[j].Role = "assistant"
-            s.data.Chats[i].Messages[j].Content = replacement.Content
-            s.data.Chats[i].Messages[j].Provider = replacement.Provider
+		for j := range s.data.Chats[i].Messages {
+			if s.data.Chats[i].Messages[j].ID != messageID {
+				continue
+			}
+			orig := s.data.Chats[i].Messages[j]
+			if orig.Role != "assistant" {
+				return errors.New("target message is not assistant")
+			}
+			ensureMessageHistory(&orig)
+			s.data.Chats[i].Messages[j].Role = "assistant"
+			s.data.Chats[i].Messages[j].Content = replacement.Content
+			s.data.Chats[i].Messages[j].Provider = replacement.Provider
 			s.data.Chats[i].Messages[j].Model = replacement.Model
 			s.data.Chats[i].Messages[j].TargetID = replacement.TargetID
-			s.data.Chats[i].Messages[j].Inclusion = replacement.Inclusion
-			s.data.Chats[i].Messages[j].ScopeID = replacement.ScopeID
+			s.data.Chats[i].Messages[j].IsSummary = orig.IsSummary
+			if s.data.Chats[i].Messages[j].IsSummary {
+				s.data.Chats[i].Messages[j].Inclusion = "always"
+				s.data.Chats[i].Messages[j].ScopeID = ""
+			} else {
+				s.data.Chats[i].Messages[j].Inclusion = replacement.Inclusion
+				s.data.Chats[i].Messages[j].ScopeID = replacement.ScopeID
+			}
 			s.data.Chats[i].Messages[j].CreatedAt = time.Now().UTC()
 			if s.data.Chats[i].Messages[j].Inclusion == "" {
 				s.data.Chats[i].Messages[j].Inclusion = "model_only"
 			}
-            if s.data.Chats[i].Messages[j].ScopeID == "" {
-                s.data.Chats[i].Messages[j].ScopeID = s.data.Chats[i].Messages[j].TargetID
-            }
-            s.data.Chats[i].Messages[j].History = append(orig.History, MessageVersion{
-                Content:   replacement.Content,
-                Provider:  replacement.Provider,
-                Model:     replacement.Model,
-                TargetID:  replacement.TargetID,
-                CreatedAt: time.Now().UTC(),
-            })
-            s.data.Chats[i].Messages[j].HistoryIndex = len(s.data.Chats[i].Messages[j].History) - 1
-            s.data.Chats[i].UpdatedAt = time.Now().UTC()
+			if s.data.Chats[i].Messages[j].ScopeID == "" {
+				s.data.Chats[i].Messages[j].ScopeID = s.data.Chats[i].Messages[j].TargetID
+			}
+			s.data.Chats[i].Messages[j].History = append(orig.History, MessageVersion{
+				Content:   replacement.Content,
+				Provider:  replacement.Provider,
+				Model:     replacement.Model,
+				TargetID:  replacement.TargetID,
+				CreatedAt: time.Now().UTC(),
+			})
+			s.data.Chats[i].Messages[j].HistoryIndex = len(s.data.Chats[i].Messages[j].History) - 1
+			s.data.Chats[i].UpdatedAt = time.Now().UTC()
 			if err := s.touchFolderLocked(s.data.Chats[i].FolderID); err != nil {
 				return err
 			}
@@ -570,22 +650,22 @@ func (s *Store) EditUserMessageInPlace(chatID, messageID, content string) (Chat,
 		if msgIdx < 0 {
 			return Chat{}, errors.New("message not found")
 		}
-			if s.data.Chats[i].Messages[msgIdx].Role != "user" {
-				return Chat{}, errors.New("only user messages can be edited")
-			}
+		if s.data.Chats[i].Messages[msgIdx].Role != "user" {
+			return Chat{}, errors.New("only user messages can be edited")
+		}
 
-			ensureMessageHistory(&s.data.Chats[i].Messages[msgIdx])
-			s.data.Chats[i].Messages[msgIdx].History = append(s.data.Chats[i].Messages[msgIdx].History, MessageVersion{
-				Content:   content,
-				CreatedAt: time.Now().UTC(),
-			})
-			s.data.Chats[i].Messages[msgIdx].HistoryIndex = len(s.data.Chats[i].Messages[msgIdx].History) - 1
-			s.data.Chats[i].Messages[msgIdx].Content = content
-			s.data.Chats[i].Messages[msgIdx].Provider = ""
-			s.data.Chats[i].Messages[msgIdx].Model = ""
-			s.data.Chats[i].Messages[msgIdx].TargetID = ""
-			s.data.Chats[i].Messages[msgIdx].CreatedAt = time.Now().UTC()
-			s.data.Chats[i].Messages = cloneMessages(s.data.Chats[i].Messages[:msgIdx+1])
+		ensureMessageHistory(&s.data.Chats[i].Messages[msgIdx])
+		s.data.Chats[i].Messages[msgIdx].History = append(s.data.Chats[i].Messages[msgIdx].History, MessageVersion{
+			Content:   content,
+			CreatedAt: time.Now().UTC(),
+		})
+		s.data.Chats[i].Messages[msgIdx].HistoryIndex = len(s.data.Chats[i].Messages[msgIdx].History) - 1
+		s.data.Chats[i].Messages[msgIdx].Content = content
+		s.data.Chats[i].Messages[msgIdx].Provider = ""
+		s.data.Chats[i].Messages[msgIdx].Model = ""
+		s.data.Chats[i].Messages[msgIdx].TargetID = ""
+		s.data.Chats[i].Messages[msgIdx].CreatedAt = time.Now().UTC()
+		s.data.Chats[i].Messages = cloneMessages(s.data.Chats[i].Messages[:msgIdx+1])
 		s.data.Chats[i].UpdatedAt = time.Now().UTC()
 		if err := s.touchFolderLocked(s.data.Chats[i].FolderID); err != nil {
 			return Chat{}, err
@@ -607,18 +687,18 @@ func (s *Store) AppendUserPrompt(chatID, prompt string) error {
 			continue
 		}
 		now := time.Now().UTC()
-				s.data.Chats[i].Messages = append(s.data.Chats[i].Messages, Message{
-					ID:        newID("msg"),
-					Role:      "user",
-					Content:   prompt,
-					Inclusion: "always",
-					History: []MessageVersion{{
-						Content:   prompt,
-						CreatedAt: now,
-					}},
-					HistoryIndex: 0,
-					CreatedAt: now,
-				})
+		s.data.Chats[i].Messages = append(s.data.Chats[i].Messages, Message{
+			ID:        newID("msg"),
+			Role:      "user",
+			Content:   prompt,
+			Inclusion: "always",
+			History: []MessageVersion{{
+				Content:   prompt,
+				CreatedAt: now,
+			}},
+			HistoryIndex: 0,
+			CreatedAt:    now,
+		})
 		if len(s.data.Chats[i].Messages) == 1 && strings.TrimSpace(s.data.Chats[i].Title) == "New Chat" {
 			s.data.Chats[i].Title = trimTitle(prompt)
 		}
@@ -640,29 +720,36 @@ func (s *Store) AppendAssistantMessages(chatID string, outputs []Message) error 
 			continue
 		}
 		now := time.Now().UTC()
-        for _, out := range outputs {
-            if strings.TrimSpace(out.Content) == "" {
-                continue
-            }
-            out.ID = newID("msg")
-            out.Role = "assistant"
-            if strings.TrimSpace(out.Inclusion) == "" {
-                out.Inclusion = "model_only"
-            }
-            if out.Inclusion == "model_only" && strings.TrimSpace(out.ScopeID) == "" {
-                out.ScopeID = out.TargetID
-            }
-            out.History = []MessageVersion{{
-                Content:   out.Content,
-                Provider:  out.Provider,
-                Model:     out.Model,
-                TargetID:  out.TargetID,
-                CreatedAt: now,
-            }}
-            out.HistoryIndex = 0
-            out.CreatedAt = now
-            s.data.Chats[i].Messages = append(s.data.Chats[i].Messages, out)
-        }
+		for _, out := range outputs {
+			if strings.TrimSpace(out.Content) == "" {
+				continue
+			}
+			out.ID = newID("msg")
+			out.Role = "assistant"
+			if strings.TrimSpace(out.Inclusion) == "" {
+				if out.IsSummary {
+					out.Inclusion = "always"
+				} else {
+					out.Inclusion = "model_only"
+				}
+			}
+			if out.Inclusion == "model_only" && strings.TrimSpace(out.ScopeID) == "" {
+				out.ScopeID = out.TargetID
+			}
+			if out.Inclusion == "always" {
+				out.ScopeID = ""
+			}
+			out.History = []MessageVersion{{
+				Content:   out.Content,
+				Provider:  out.Provider,
+				Model:     out.Model,
+				TargetID:  out.TargetID,
+				CreatedAt: now,
+			}}
+			out.HistoryIndex = 0
+			out.CreatedAt = now
+			s.data.Chats[i].Messages = append(s.data.Chats[i].Messages, out)
+		}
 		s.data.Chats[i].UpdatedAt = now
 		if err := s.touchFolderLocked(s.data.Chats[i].FolderID); err != nil {
 			return err

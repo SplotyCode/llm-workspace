@@ -200,6 +200,26 @@ export class ChatService {
     }
   }
 
+  async summarizeFromUserMessage(
+    chatId: string,
+    userMessageId: string,
+    target: { provider: string; model: string },
+    config: ChatRequest['config'],
+    callbacks: StreamCallbacks,
+    signal?: AbortSignal
+  ): Promise<void> {
+    await this.streamFromEndpoint(
+      `${this.baseUrl}/api/chats/${chatId}/summarize`,
+      {
+        userMessageId,
+        target,
+        config
+      },
+      callbacks,
+      signal
+    );
+  }
+
   async streamChat(request: ChatRequest, callbacks: StreamCallbacks, signal?: AbortSignal): Promise<void> {
     await this.streamFromEndpoint(`${this.baseUrl}/api/chat/stream`, request, callbacks, signal);
   }

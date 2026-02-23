@@ -67,6 +67,7 @@ export interface Message {
   provider?: string;
   model?: string;
   targetId?: string;
+  isSummary?: boolean;
   inclusion?: 'dont_include' | 'model_only' | 'always';
   scopeId?: string;
   history?: MessageVersion[];

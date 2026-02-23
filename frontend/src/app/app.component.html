@@ -19,7 +19,7 @@
         <div class="folder-list">
           <div
             class="folder-item"
-            *ngFor="let folder of folders"
+            *ngFor="let folder of folders; trackBy: trackById"
             [class.active]="folder.id === selectedFolderId"
             [class.drop-target]="dropFolderId === folder.id"
             (click)="selectFolder(folder.id)"
@@ -44,7 +44,7 @@
         <div class="chat-list">
           <div
             class="chat-item"
-            *ngFor="let chat of chats"
+            *ngFor="let chat of chats; trackBy: trackById"
             [class.active]="chat.id === selectedChatId"
             draggable="true"
             (click)="selectChat(chat.id)"
@@ -81,7 +81,7 @@
           <button
             type="button"
             class="chip"
-            *ngFor="let target of quickTargets"
+            *ngFor="let target of quickTargets; trackBy: trackById"
             [class.selected]="isTargetSelected(target.id)"
             [class.openrouter]="target.provider === 'openrouter'"
             [class.ollama]="target.provider === 'ollama'"
@@ -94,77 +94,166 @@
       </section>
 
       <section class="history" *ngIf="selectedChat; else noChat">
-        <article class="msg" *ngFor="let msg of selectedChat.messages" [class.user]="msg.role === 'user'" [class.assistant]="msg.role === 'assistant'">
-          <div class="msg-meta">
-            <strong>{{ msg.role }}</strong>
-            <span *ngIf="msg.provider && msg.model">{{ msg.provider }} · {{ msg.model }}</span>
-            <div class="msg-actions">
-              <span class="status" *ngIf="msg.status" [class.streaming]="msg.status === 'streaming'" [class.done]="msg.status === 'done'" [class.error]="msg.status === 'error'">
-                {{ msg.status }}
-              </span>
-              <div class="msg-history-nav" *ngIf="canMoveMessageHistory(msg)">
-                <button
-                  type="button"
-                  class="history-btn"
-                  [disabled]="(msg.historyIndex ?? ((msg.history?.length ?? 1) - 1)) <= 0"
-                  (click)="moveMessageHistory(msg, -1)"
-                  title="Show previous assistant version"
-                >
-                  &lt;
-                </button>
-                <span class="history-pos">{{ messageHistoryPosition(msg) }}</span>
-                <button
-                  type="button"
-                  class="history-btn"
-                  [disabled]="(msg.historyIndex ?? ((msg.history?.length ?? 1) - 1)) >= ((msg.history?.length ?? 1) - 1)"
-                  (click)="moveMessageHistory(msg, 1)"
-                  title="Show newer assistant version"
-                >
-                  &gt;
-                </button>
-              </div>
-              <div class="include-wrap" (click)="$event.stopPropagation()">
-                <button
-                  type="button"
-                  class="include-current"
-                  (click)="toggleInclusionMenu(msg.id, $event)"
-                  [attr.title]="inclusionOptionTitle(messageInclusionValue(msg))"
-                >
-                  {{ inclusionDisplayLabel(msg) }}
-                </button>
-                <div class="include-control" *ngIf="openInclusionMessageId === msg.id" role="group" aria-label="Message context policy">
+        <div class="message-group" *ngFor="let group of messageGroups; trackBy: trackByGroup">
+          <article class="msg user">
+            <div class="msg-meta">
+              <strong>user</strong>
+              <div class="msg-actions">
+                <div class="msg-history-nav" *ngIf="canMoveMessageHistory(group.user)">
                   <button
                     type="button"
-                    class="include-option"
-                    *ngFor="let option of messageInclusionOptions(msg)"
-                    [class.active]="messageInclusionValue(msg) === option.value"
-                    (click)="onMessageInclusionChange(msg, option.value); closeInclusionMenu()"
-                    [attr.title]="inclusionOptionTitle(option.value)"
+                    class="history-btn"
+                    [disabled]="(group.user.historyIndex ?? ((group.user.history?.length ?? 1) - 1)) <= 0"
+                    (click)="moveMessageHistory(group.user, -1)"
+                    title="Show previous user version"
                   >
-                    {{ option.label }}
+                    &lt;
+                  </button>
+                  <span class="history-pos">{{ messageHistoryPosition(group.user) }}</span>
+                  <button
+                    type="button"
+                    class="history-btn"
+                    [disabled]="(group.user.historyIndex ?? ((group.user.history?.length ?? 1) - 1)) >= ((group.user.history?.length ?? 1) - 1)"
+                    (click)="moveMessageHistory(group.user, 1)"
+                    title="Show newer user version"
+                  >
+                    &gt;
                   </button>
                 </div>
-              </div>
-              <div class="msg-menu-wrap" (click)="$event.stopPropagation()">
-                <button
-                  type="button"
-                  class="msg-menu-btn"
-                  aria-label="Message actions"
-                  (click)="toggleMessageMenu(msg.id, $event)"
-                >
-                  ⋯
-                </button>
-                <div class="msg-menu" *ngIf="openMessageMenuId === msg.id">
-                  <button type="button" (click)="regenerateFromMessage(msg)">Regenerate</button>
-                  <button type="button" (click)="forkFromMessage(msg)">Fork chat from here</button>
-                  <button type="button" *ngIf="msg.role === 'user'" (click)="openEditUserMessage(msg)">Edit message</button>
+                <div class="include-wrap" (click)="$event.stopPropagation()">
+                  <button
+                    type="button"
+                    class="include-current"
+                    (click)="toggleInclusionMenu(group.user.id, $event)"
+                    [attr.title]="inclusionOptionTitle(messageInclusionValue(group.user))"
+                  >
+                    {{ inclusionDisplayLabel(group.user) }}
+                  </button>
+                  <div class="include-control" *ngIf="openInclusionMessageId === group.user.id" role="group" aria-label="Message context policy">
+                    <button
+                      type="button"
+                      class="include-option"
+                      *ngFor="let option of messageInclusionOptions(group.user)"
+                      [class.active]="messageInclusionValue(group.user) === option.value"
+                      (click)="onMessageInclusionChange(group.user, option.value); closeInclusionMenu()"
+                      [attr.title]="inclusionOptionTitle(option.value)"
+                    >
+                      {{ option.label }}
+                    </button>
+                  </div>
+                </div>
+                <div class="msg-menu-wrap" (click)="$event.stopPropagation()">
+                  <button
+                    type="button"
+                    class="msg-menu-btn"
+                    aria-label="Message actions"
+                    (click)="toggleMessageMenu(group.user.id, $event)"
+                  >
+                    ⋯
+                  </button>
+                  <div class="msg-menu" *ngIf="openMessageMenuId === group.user.id">
+                    <button type="button" (click)="regenerateFromMessage(group.user)">Regenerate</button>
+                    <button type="button" (click)="forkFromMessage(group.user)">Fork chat from here</button>
+                    <button type="button" (click)="openEditUserMessage(group.user)">Edit message</button>
+                  </div>
                 </div>
               </div>
             </div>
+            <pre>{{ group.user.content || 'Waiting for first token...' }}</pre>
+            <p class="error" *ngIf="group.user.error">{{ group.user.error }}</p>
+          </article>
+
+          <div class="assistant-stack">
+            <article class="msg assistant" *ngFor="let msg of group.assistants; trackBy: trackById">
+              <div class="msg-meta">
+                <strong>assistant</strong>
+                <span *ngIf="msg.provider && msg.model">{{ msg.provider }} · {{ msg.model }}</span>
+                <span class="summary-badge" *ngIf="msg.isSummary">Summary</span>
+                <div class="msg-actions">
+                  <span class="status" *ngIf="msg.status" [class.streaming]="msg.status === 'streaming'" [class.done]="msg.status === 'done'" [class.error]="msg.status === 'error'">
+                    {{ msg.status }}
+                  </span>
+                  <div class="msg-history-nav" *ngIf="canMoveMessageHistory(msg)">
+                    <button
+                      type="button"
+                      class="history-btn"
+                      [disabled]="(msg.historyIndex ?? ((msg.history?.length ?? 1) - 1)) <= 0"
+                      (click)="moveMessageHistory(msg, -1)"
+                      title="Show previous assistant version"
+                    >
+                      &lt;
+                    </button>
+                    <span class="history-pos">{{ messageHistoryPosition(msg) }}</span>
+                    <button
+                      type="button"
+                      class="history-btn"
+                      [disabled]="(msg.historyIndex ?? ((msg.history?.length ?? 1) - 1)) >= ((msg.history?.length ?? 1) - 1)"
+                      (click)="moveMessageHistory(msg, 1)"
+                      title="Show newer assistant version"
+                    >
+                      &gt;
+                    </button>
+                  </div>
+                  <div class="include-wrap" (click)="$event.stopPropagation()">
+                    <button
+                      type="button"
+                      class="include-current"
+                      (click)="toggleInclusionMenu(msg.id, $event)"
+                      [attr.title]="inclusionOptionTitle(messageInclusionValue(msg))"
+                    >
+                      {{ inclusionDisplayLabel(msg) }}
+                    </button>
+                    <div class="include-control" *ngIf="openInclusionMessageId === msg.id" role="group" aria-label="Message context policy">
+                      <button
+                        type="button"
+                        class="include-option"
+                        *ngFor="let option of messageInclusionOptions(msg)"
+                        [class.active]="messageInclusionValue(msg) === option.value"
+                        (click)="onMessageInclusionChange(msg, option.value); closeInclusionMenu()"
+                        [attr.title]="inclusionOptionTitle(option.value)"
+                      >
+                        {{ option.label }}
+                      </button>
+                    </div>
+                  </div>
+                  <div class="msg-menu-wrap" (click)="$event.stopPropagation()">
+                    <button
+                      type="button"
+                      class="msg-menu-btn"
+                      aria-label="Message actions"
+                      (click)="toggleMessageMenu(msg.id, $event)"
+                    >
+                      ⋯
+                    </button>
+                    <div class="msg-menu" *ngIf="openMessageMenuId === msg.id">
+                      <button type="button" (click)="regenerateFromMessage(msg)">Regenerate</button>
+                      <button type="button" (click)="forkFromMessage(msg)">Fork chat from here</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <pre>{{ msg.content || 'Waiting for first token...' }}</pre>
+              <p class="error" *ngIf="msg.error">{{ msg.error }}</p>
+            </article>
           </div>
-          <pre>{{ msg.content || 'Waiting for first token...' }}</pre>
-          <p class="error" *ngIf="msg.error">{{ msg.error }}</p>
-        </article>
+
+          <div class="group-summary">
+            <select [ngModel]="summaryTargetId(group.user.id)" (ngModelChange)="setSummaryTargetId(group.user.id, $event)">
+              <option *ngFor="let model of summaryModelOptions; trackBy: trackById" [value]="model.id">
+                {{ providerIcon(model.provider) }} · {{ model.model }}
+              </option>
+            </select>
+            <button
+              type="button"
+              class="secondary"
+              (click)="requestSummarize(group.user.id)"
+              [disabled]="!summaryTargetId(group.user.id)"
+            >
+              {{ isSummaryPending(group.user.id) ? 'Queued...' : 'Summarize' }}
+            </button>
+            <span class="muted" *ngIf="isSummaryPending(group.user.id)">Will run when current generation finishes.</span>
+          </div>
+        </div>
       </section>
       <ng-template #noChat>
         <p class="muted">Create or select a chat to start.</p>
