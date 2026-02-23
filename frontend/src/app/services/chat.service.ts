@@ -226,12 +226,14 @@ export class ChatService {
 
   async getContextLimits(
     targets: Array<{ provider: string; model: string }>,
-    config: ChatRequest['config']
+    config: ChatRequest['config'],
+    chatId?: string,
+    prompt?: string
   ): Promise<ContextLimitItem[]> {
     const res = await fetch(`${this.baseUrl}/api/context-limits`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ targets, config })
+      body: JSON.stringify({ targets, config, chatId, prompt })
     });
     if (!res.ok) {
       const body = await res.text();

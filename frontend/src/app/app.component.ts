@@ -9,12 +9,6 @@ interface MessageGroup {
   assistants: Message[];
 }
 
-interface ContextUsageView extends ContextLimitItem {
-  estimatedTokens: number;
-  usedPercent?: number;
-  remainingTokens?: number;
-}
-
 @Component({
   selector: 'app-root',
   standalone: true,
@@ -77,6 +71,7 @@ export class AppComponent implements OnInit {
   contextLimitsByTarget = new Map<string, ContextLimitItem>();
   isContextLoading = false;
   contextLoadError = '';
+  private contextRefreshTimer?: ReturnType<typeof setTimeout>;
   private quickTargetsCache: Array<{ id: string; provider: string; model: string }> = [];
   private quickTargetsKey = '';
   private messageGroupsCache: MessageGroup[] = [];
@@ -169,6 +164,15 @@ export class AppComponent implements OnInit {
       this.selectedTargets.add(targetId);
     }
     void this.refreshContextLimits();
+  }
+
+  onPromptChanged(): void {
+    if (this.contextRefreshTimer) {
+      clearTimeout(this.contextRefreshTimer);
+    }
+    this.contextRefreshTimer = setTimeout(() => {
+      void this.refreshContextLimits();
+    }, 220);
   }
 
   isTargetSelected(targetId: string): boolean {
@@ -450,9 +454,9 @@ export class AppComponent implements OnInit {
     void this.refreshContextLimits();
   }
 
-  get contextIndicatorItems(): ContextUsageView[] {
+  get contextIndicatorItems(): ContextLimitItem[] {
     const baseItems: ContextLimitItem[] = [];
-    const items: ContextUsageView[] = [];
+    const items: ContextLimitItem[] = [];
     for (const targetId of this.selectedTargets) {
       const [provider, ...modelParts] = targetId.split(':');
       const model = modelParts.join(':').trim();
@@ -466,18 +470,7 @@ export class AppComponent implements OnInit {
         baseItems.push({ targetId, provider, model, error: 'loading...' });
       }
     }
-    for (const item of baseItems) {
-      const estimated = this.estimateTokensForTarget(item.targetId);
-      const view: ContextUsageView = {
-        ...item,
-        estimatedTokens: estimated
-      };
-      if (item.maxContextTokens && !item.error && item.maxContextTokens > 0) {
-        view.usedPercent = Math.min(999, Math.round((estimated / item.maxContextTokens) * 100));
-        view.remainingTokens = item.maxContextTokens - estimated;
-      }
-      items.push(view);
-    }
+    items.push(...baseItems);
     items.sort((a, b) => {
       const ar = a.remainingTokens ?? Number.MAX_SAFE_INTEGER;
       const br = b.remainingTokens ?? Number.MAX_SAFE_INTEGER;
@@ -486,7 +479,7 @@ export class AppComponent implements OnInit {
     return items;
   }
 
-  get minContextItem(): ContextUsageView | null {
+  get minContextItem(): ContextLimitItem | null {
     const items = this.contextIndicatorItems.filter(
       (item) => typeof item.maxContextTokens === 'number' && !item.error && typeof item.remainingTokens === 'number'
     );
@@ -518,6 +511,7 @@ export class AppComponent implements OnInit {
         inclusion: allowed,
         scopeId: message.scopeId
       });
+      void this.refreshContextLimits();
     } catch (err) {
       this.error = (err as Error).message;
     }
@@ -962,45 +956,6 @@ export class AppComponent implements OnInit {
     };
   }
 
-  private estimateTokensForTarget(targetId: string): number {
-    let totalChars = 0;
-    if (this.selectedChat) {
-      for (const msg of this.selectedChat.messages) {
-        if (!this.messageIncludedForTarget(msg, targetId)) {
-          continue;
-        }
-        totalChars += (msg.content ?? '').length;
-      }
-    }
-    totalChars += this.prompt.length;
-    return Math.max(1, Math.ceil(totalChars / 4));
-  }
-
-  private messageIncludedForTarget(msg: Message, targetId: string): boolean {
-    const inclusion = (msg.inclusion ?? '').trim();
-    if (inclusion === 'dont_include') {
-      return false;
-    }
-    if (inclusion === 'always') {
-      return true;
-    }
-    if (inclusion === 'model_only') {
-      const scope = (msg.scopeId ?? msg.targetId ?? '').trim();
-      if (!scope) {
-        return true;
-      }
-      return scope === targetId;
-    }
-    if (msg.role === 'assistant') {
-      const scope = (msg.targetId ?? '').trim();
-      if (!scope) {
-        return false;
-      }
-      return scope === targetId;
-    }
-    return true;
-  }
-
   private async refreshContextLimits(): Promise<void> {
     this.contextLoadError = '';
     if (this.selectedTargets.size === 0) {
@@ -1016,7 +971,12 @@ export class AppComponent implements OnInit {
 
     this.isContextLoading = true;
     try {
-      const limits = await this.chatService.getContextLimits(targets, this.runtimeConfig());
+      const limits = await this.chatService.getContextLimits(
+        targets,
+        this.runtimeConfig(),
+        this.selectedChatId || undefined,
+        this.prompt
+      );
       const next = new Map<string, ContextLimitItem>();
       for (const item of limits) {
         next.set(item.targetId, item);

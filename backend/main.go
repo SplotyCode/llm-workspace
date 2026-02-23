@@ -115,7 +115,17 @@ func main() {
 			writeJSON(w, http.StatusOK, contextLimitsResponse{Limits: []contextLimitItem{}})
 			return
 		}
-		limits := resolveContextLimits(req, store.GetConfig())
+		baseHistory := []state.Message{}
+		chatID := strings.TrimSpace(req.ChatID)
+		if chatID != "" {
+			chat, ok := store.GetChat(chatID)
+			if !ok {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "chat not found"})
+				return
+			}
+			baseHistory = chat.Messages
+		}
+		limits := resolveContextLimits(req, store.GetConfig(), baseHistory)
 		writeJSON(w, http.StatusOK, contextLimitsResponse{Limits: limits})
 	})
 

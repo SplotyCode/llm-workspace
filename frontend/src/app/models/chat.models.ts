@@ -94,5 +94,8 @@ export interface ContextLimitItem {
   provider: string;
   model: string;
   maxContextTokens?: number;
+  estimatedTokens?: number;
+  remainingTokens?: number;
+  usedPercent?: number;
   error?: string;
 }

@@ -262,6 +262,7 @@
       <section class="composer">
         <textarea
           [(ngModel)]="prompt"
+          (ngModelChange)="onPromptChanged()"
           rows="4"
           placeholder="Ask your question."
         ></textarea>
