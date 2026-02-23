@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import { ChatDetail, ChatRequest, ChatSummary, Folder, ProviderRuntimeConfig, StreamEvent } from '../models/chat.models';
+import { ChatDetail, ChatRequest, ChatSummary, ContextLimitItem, Folder, ProviderRuntimeConfig, StreamEvent } from '../models/chat.models';
 
 interface StreamCallbacks {
   onEvent: (event: StreamEvent) => void;
@@ -222,6 +222,23 @@ export class ChatService {
 
   async streamChat(request: ChatRequest, callbacks: StreamCallbacks, signal?: AbortSignal): Promise<void> {
     await this.streamFromEndpoint(`${this.baseUrl}/api/chat/stream`, request, callbacks, signal);
+  }
+
+  async getContextLimits(
+    targets: Array<{ provider: string; model: string }>,
+    config: ChatRequest['config']
+  ): Promise<ContextLimitItem[]> {
+    const res = await fetch(`${this.baseUrl}/api/context-limits`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targets, config })
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(body || `Failed to load context limits (${res.status})`);
+    }
+    const data = await res.json();
+    return data.limits ?? [];
   }
 
   private async streamFromEndpoint(

@@ -88,3 +88,11 @@ export interface MessageVersion {
 export interface ChatDetail extends ChatSummary {
   messages: Message[];
 }
+
+export interface ContextLimitItem {
+  targetId: string;
+  provider: string;
+  model: string;
+  maxContextTokens?: number;
+  error?: string;
+}

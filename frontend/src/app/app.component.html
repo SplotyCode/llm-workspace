@@ -268,6 +268,25 @@
         <div class="actions">
           <button class="primary" (click)="submit()" [disabled]="isStreaming">{{ isStreaming ? 'Streaming...' : 'Send' }}</button>
           <button class="secondary" (click)="cancel()" [disabled]="!isStreaming">Stop</button>
+          <div class="context-indicator" *ngIf="selectedTargets.size > 0">
+            <span class="context-pill" [class.loading]="isContextLoading">
+              <ng-container *ngIf="minContextItem; else noContextData">
+                Ctx used: {{ minContextItem.usedPercent }}%
+              </ng-container>
+              <ng-template #noContextData>
+                {{ isContextLoading ? 'Ctx used: loading...' : 'Ctx used: n/a' }}
+              </ng-template>
+            </span>
+            <div class="context-popover">
+              <div class="context-popover-title">Context windows</div>
+              <div class="context-row" *ngFor="let item of contextIndicatorItems; trackBy: trackByTargetId">
+                <span>{{ item.provider }} · {{ item.model }}</span>
+                <strong *ngIf="item.usedPercent != null && !item.error">{{ item.usedPercent }}% ({{ item.estimatedTokens }}/{{ item.maxContextTokens }})</strong>
+                <strong *ngIf="item.usedPercent == null || item.error">n/a</strong>
+              </div>
+              <div class="context-row context-error" *ngIf="contextLoadError">{{ contextLoadError }}</div>
+            </div>
+          </div>
         </div>
         <p class="error" *ngIf="error">{{ error }}</p>
       </section>

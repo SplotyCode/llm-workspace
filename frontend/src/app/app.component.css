@@ -500,6 +500,70 @@ textarea {
   margin-top: 0.6rem;
 }
 
+.context-indicator {
+  position: relative;
+  margin-left: auto;
+}
+
+.context-pill {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #c6d8de;
+  background: #f4fafb;
+  color: #284550;
+  border-radius: 999px;
+  padding: 0.32rem 0.62rem;
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.context-pill.loading {
+  opacity: 0.85;
+}
+
+.context-popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 0.35rem);
+  min-width: 280px;
+  max-width: 420px;
+  background: #fff;
+  border: 1px solid #d3e0e4;
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(16, 33, 39, 0.14);
+  padding: 0.45rem;
+  display: none;
+  z-index: 20;
+}
+
+.context-indicator:hover .context-popover {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.context-popover-title {
+  font-size: 0.74rem;
+  color: #4d6974;
+}
+
+.context-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.55rem;
+  border-top: 1px solid #eef3f5;
+  padding-top: 0.3rem;
+  font-size: 0.76rem;
+}
+
+.context-row strong {
+  font-weight: 600;
+}
+
+.context-row.context-error {
+  color: #9c251b;
+}
+
 button {
   border: 0;
   border-radius: 10px;
@@ -645,5 +709,16 @@ label {
   .chat-rename-btn {
     opacity: 1;
     pointer-events: auto;
+  }
+
+  .context-indicator {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .context-popover {
+    right: auto;
+    left: 0;
+    width: min(100%, 420px);
   }
 }

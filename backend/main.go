@@ -101,6 +101,24 @@ func main() {
 		writeJSON(w, http.StatusOK, map[string]any{"providers": providerCatalog()})
 	})
 
+	mux.HandleFunc("/api/context-limits", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var req contextLimitsRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+			return
+		}
+		if len(req.Targets) == 0 {
+			writeJSON(w, http.StatusOK, contextLimitsResponse{Limits: []contextLimitItem{}})
+			return
+		}
+		limits := resolveContextLimits(req, store.GetConfig())
+		writeJSON(w, http.StatusOK, contextLimitsResponse{Limits: limits})
+	})
+
 	mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:

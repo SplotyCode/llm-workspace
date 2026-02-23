@@ -1,12 +1,18 @@
 import { CommonModule } from '@angular/common';
 import { Component, ElementRef, OnInit, QueryList, ViewChildren } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { ChatDetail, ChatRequest, ChatSummary, Folder, Message, ProviderRuntimeConfig, StreamEvent } from './models/chat.models';
+import { ChatDetail, ChatRequest, ChatSummary, ContextLimitItem, Folder, Message, ProviderRuntimeConfig, StreamEvent } from './models/chat.models';
 import { ChatService } from './services/chat.service';
 
 interface MessageGroup {
   user: Message;
   assistants: Message[];
+}
+
+interface ContextUsageView extends ContextLimitItem {
+  estimatedTokens: number;
+  usedPercent?: number;
+  remainingTokens?: number;
 }
 
 @Component({
@@ -68,6 +74,9 @@ export class AppComponent implements OnInit {
   summaryTargetByUser = new Map<string, string>();
   pendingSummaries = new Set<string>();
   private isSummaryStream = false;
+  contextLimitsByTarget = new Map<string, ContextLimitItem>();
+  isContextLoading = false;
+  contextLoadError = '';
   private quickTargetsCache: Array<{ id: string; provider: string; model: string }> = [];
   private quickTargetsKey = '';
   private messageGroupsCache: MessageGroup[] = [];
@@ -80,6 +89,7 @@ export class AppComponent implements OnInit {
     try {
       this.config = await this.chatService.getConfig();
       await this.reloadFolders();
+      await this.refreshContextLimits();
     } catch (err) {
       this.error = (err as Error).message;
     }
@@ -142,6 +152,10 @@ export class AppComponent implements OnInit {
     return group.user.id;
   }
 
+  trackByTargetId(_index: number, item: { targetId: string }): string {
+    return item.targetId;
+  }
+
   providerIcon(provider: string): string {
     if (provider === 'openrouter') return 'OR';
     if (provider === 'ollama') return 'OL';
@@ -154,6 +168,7 @@ export class AppComponent implements OnInit {
     } else {
       this.selectedTargets.add(targetId);
     }
+    void this.refreshContextLimits();
   }
 
   isTargetSelected(targetId: string): boolean {
@@ -231,6 +246,7 @@ export class AppComponent implements OnInit {
     this.selectedChatId = chatId;
     try {
       this.selectedChat = await this.chatService.getChat(chatId);
+      void this.refreshContextLimits();
     } catch (err) {
       this.error = (err as Error).message;
     }
@@ -405,6 +421,7 @@ export class AppComponent implements OnInit {
     try {
       await this.chatService.saveConfig(this.config);
       this.showSettings = false;
+      await this.refreshContextLimits();
     } catch (err) {
       this.error = (err as Error).message;
     }
@@ -424,11 +441,59 @@ export class AppComponent implements OnInit {
   updateOpenRouterModels(input: string): void {
     this.config.openrouter.models = this.parseModels(input);
     this.cleanupSelectedTargets();
+    void this.refreshContextLimits();
   }
 
   updateOllamaModels(input: string): void {
     this.config.ollama.models = this.parseModels(input);
     this.cleanupSelectedTargets();
+    void this.refreshContextLimits();
+  }
+
+  get contextIndicatorItems(): ContextUsageView[] {
+    const baseItems: ContextLimitItem[] = [];
+    const items: ContextUsageView[] = [];
+    for (const targetId of this.selectedTargets) {
+      const [provider, ...modelParts] = targetId.split(':');
+      const model = modelParts.join(':').trim();
+      if (!provider || !model) {
+        continue;
+      }
+      const existing = this.contextLimitsByTarget.get(targetId);
+      if (existing) {
+        baseItems.push(existing);
+      } else {
+        baseItems.push({ targetId, provider, model, error: 'loading...' });
+      }
+    }
+    for (const item of baseItems) {
+      const estimated = this.estimateTokensForTarget(item.targetId);
+      const view: ContextUsageView = {
+        ...item,
+        estimatedTokens: estimated
+      };
+      if (item.maxContextTokens && !item.error && item.maxContextTokens > 0) {
+        view.usedPercent = Math.min(999, Math.round((estimated / item.maxContextTokens) * 100));
+        view.remainingTokens = item.maxContextTokens - estimated;
+      }
+      items.push(view);
+    }
+    items.sort((a, b) => {
+      const ar = a.remainingTokens ?? Number.MAX_SAFE_INTEGER;
+      const br = b.remainingTokens ?? Number.MAX_SAFE_INTEGER;
+      return ar - br;
+    });
+    return items;
+  }
+
+  get minContextItem(): ContextUsageView | null {
+    const items = this.contextIndicatorItems.filter(
+      (item) => typeof item.maxContextTokens === 'number' && !item.error && typeof item.remainingTokens === 'number'
+    );
+    if (items.length === 0) {
+      return null;
+    }
+    return items[0];
   }
 
   async onMessageInclusionChange(message: Message, value: string): Promise<void> {
@@ -895,6 +960,73 @@ export class AppComponent implements OnInit {
         models: this.config.ollama.models
       }
     };
+  }
+
+  private estimateTokensForTarget(targetId: string): number {
+    let totalChars = 0;
+    if (this.selectedChat) {
+      for (const msg of this.selectedChat.messages) {
+        if (!this.messageIncludedForTarget(msg, targetId)) {
+          continue;
+        }
+        totalChars += (msg.content ?? '').length;
+      }
+    }
+    totalChars += this.prompt.length;
+    return Math.max(1, Math.ceil(totalChars / 4));
+  }
+
+  private messageIncludedForTarget(msg: Message, targetId: string): boolean {
+    const inclusion = (msg.inclusion ?? '').trim();
+    if (inclusion === 'dont_include') {
+      return false;
+    }
+    if (inclusion === 'always') {
+      return true;
+    }
+    if (inclusion === 'model_only') {
+      const scope = (msg.scopeId ?? msg.targetId ?? '').trim();
+      if (!scope) {
+        return true;
+      }
+      return scope === targetId;
+    }
+    if (msg.role === 'assistant') {
+      const scope = (msg.targetId ?? '').trim();
+      if (!scope) {
+        return false;
+      }
+      return scope === targetId;
+    }
+    return true;
+  }
+
+  private async refreshContextLimits(): Promise<void> {
+    this.contextLoadError = '';
+    if (this.selectedTargets.size === 0) {
+      this.contextLimitsByTarget = new Map<string, ContextLimitItem>();
+      return;
+    }
+
+    const targets = this.buildTargets();
+    if (targets.length === 0) {
+      this.contextLimitsByTarget = new Map<string, ContextLimitItem>();
+      return;
+    }
+
+    this.isContextLoading = true;
+    try {
+      const limits = await this.chatService.getContextLimits(targets, this.runtimeConfig());
+      const next = new Map<string, ContextLimitItem>();
+      for (const item of limits) {
+        next.set(item.targetId, item);
+      }
+      this.contextLimitsByTarget = next;
+    } catch (err) {
+      this.contextLoadError = (err as Error).message;
+    } finally {
+      this.isContextLoading = false;
+    }
   }
 
   private handleEvent(event: StreamEvent): void {
