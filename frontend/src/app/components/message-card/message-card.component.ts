@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, EventEmitter, Input, Output } from '@angular/core';
+import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from '@angular/core';
 import { Message } from '../../models/chat.models';
 
 @Component({
@@ -8,7 +8,7 @@ import { Message } from '../../models/chat.models';
   imports: [CommonModule],
   templateUrl: './message-card.component.html'
 })
-export class MessageCardComponent {
+export class MessageCardComponent implements OnChanges {
   @Input({ required: true }) message!: Message;
   @Input() roleLabel: 'user' | 'assistant' = 'assistant';
   @Input() showProvider = false;
@@ -32,4 +32,33 @@ export class MessageCardComponent {
   @Output() regenerate = new EventEmitter<void>();
   @Output() fork = new EventEmitter<void>();
   @Output() edit = new EventEmitter<void>();
+
+  collapsed = false;
+  private manuallyToggled = false;
+  private lastMessageId = '';
+
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes['message']) {
+      const id = this.message?.id ?? '';
+      if (id !== this.lastMessageId) {
+        this.lastMessageId = id;
+        this.manuallyToggled = false;
+      }
+      if (!this.manuallyToggled) {
+        this.collapsed = this.canCollapse;
+      }
+    }
+  }
+
+  get canCollapse(): boolean {
+    const content = this.message?.content ?? '';
+    if (!content) return false;
+    const lineCount = content.split('\n').length;
+    return lineCount > 4 || content.length > 480;
+  }
+
+  toggleCollapse(): void {
+    this.manuallyToggled = true;
+    this.collapsed = !this.collapsed;
+  }
 }

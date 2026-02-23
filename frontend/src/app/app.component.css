@@ -640,6 +640,31 @@ pre {
   font-size: 0.84rem;
 }
 
+.msg-content {
+  margin: 0.45rem 0 0;
+  white-space: pre-wrap;
+  font-family: "IBM Plex Mono", Menlo, monospace;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.msg-content.collapsed {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.msg-collapse-btn {
+  margin-top: 0.35rem;
+  padding: 0.18rem 0.52rem;
+  border-radius: 999px;
+  border: 1px solid #cdd9de;
+  background: #f5fafb;
+  color: #2b4b56;
+  font-size: 0.72rem;
+}
+
 .muted {
   color: var(--muted);
 }
